@@ -1,0 +1,17 @@
+name: distortopia
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - haptools
+  - biopython
+  - pandas
+  - numpy
+  - matplotlib
+  - streamlit 
+  - bcftools
+  - samtools
+  - minimap2
+  - htslib
