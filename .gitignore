@@ -1,7 +1,39 @@
-# In .gitignore
+# Raw genome & large data files
 raw_data/
 *.fa
 *.fna
 *.fasta
+*.fa.gz
+*.fq
+*.fq.gz
+*.fastq
+*.fastq.gz
+*.bam
+*.sam
+*.bai
+*.cram
+*.vcf
+*.vcf.gz
+*.bcf
+*.idx
+*.tsv
+*.csv
 
-raw_data/
+# Intermediate analysis outputs
+*.paf
+*.pileup
+*.tmp
+*.tmp.*
+
+# Results from pipeline (don’t track unless summarized)
+*_gametes_longreads.fq.gz
+*_gametes.bam
+*_gametes.vcf
+*_crossovers.tsv
+
+# Large archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
