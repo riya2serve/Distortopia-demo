@@ -1,0 +1,6 @@
+# In .gitignore
+raw_data/
+*.fa
+*.fna
+*.fasta
+
