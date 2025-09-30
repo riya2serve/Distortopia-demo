@@ -1,36 +1,27 @@
 """
-Simulate long reads from a pool of gametes made by recombining two haplotypes.
+Simulate PacBio HiFi long reads from a pool of gametes made by recombining two haplotypes.
 
-Usage
------
+CLI example
+-----------
 python scripts/sim_gamete_pool_long_reads.py \
   --hap1 alt_refs/A_thaliana_hap1.fa \
   --hap2 alt_refs/A_thaliana_hap2.fa \
   --read-len 100000 \
   --n-reads 1000 \
-  --mean-xovers 0.1 \
+  --mean-xovers 1.0 \
   --seed 42 \
   --out reads/athal_gametes_hifi.fq.gz
-
-Notes
------
-- Recombination is modeled as a Poisson(k; mean = --mean-xovers) number of
-  crossovers *per read*, with crossover breakpoints placed uniformly at random
-  along the read and segments alternating between haplotypes.
-- Starts are sampled uniformly across contigs shared by both haplotypes,
-  weighted by contig length. The segment is taken from the same coordinates
-  in hap1/hap2 (assumes coordinate-compatible haplotypes).
-- FASTQ qualities are constant Q60 ('I').
 """
 
 import argparse
 import gzip
 import os
 import random
-from collections import defaultdict
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import streamlit as st
 from Bio import SeqIO   # biopython
 
 # -------------------- FASTA helpers --------------------
@@ -45,9 +36,6 @@ def read_fasta(path: str) -> Dict[str, str]:
     return seqs
 
 def contig_index(h1: Dict[str, str], h2: Dict[str, str]) -> List[Tuple[str, int]]:
-    """
-    Return contigs present in BOTH haplotypes with usable length.
-    """
     shared = sorted(set(h1.keys()) & set(h2.keys()))
     out = []
     for c in shared:
@@ -59,9 +47,6 @@ def contig_index(h1: Dict[str, str], h2: Dict[str, str]) -> List[Tuple[str, int]
     return out
 
 def weighted_choice(contigs: List[Tuple[str, int]], rng: random.Random) -> Tuple[str, int]:
-    """
-    Choose a contig name proportional to its length.
-    """
     total = sum(L for _, L in contigs)
     r = rng.randrange(total)
     acc = 0
@@ -73,35 +58,27 @@ def weighted_choice(contigs: List[Tuple[str, int]], rng: random.Random) -> Tuple
 
 # -------------------- recombination model --------------------
 
-def breakpoints_for_read(read_len: int, mean_xovers: float, rng: random.Random) -> List[int]:
-    """
-    Draw k ~ Poisson(mean_xovers), then place k breakpoints uniformly in (1, read_len-1).
-    Return sorted list of breakpoint positions (0-based, exclusive end of a segment).
-    """
-    # Python's random has no Poisson; simple thinning using numpy would be nice,
-    # but we'll keep stdlib only. Use a Knuth Poisson sampler.
+def _poisson_knuth(mean_xovers: float, rng: random.Random) -> int:
+    if mean_xovers <= 0:
+        return 0
     L = pow(2.718281828459045, -mean_xovers)
     k, p = 0, 1.0
     while True:
         p *= rng.random()
         if p <= L:
-            break
+            return k
         k += 1
+
+def breakpoints_for_read(read_len: int, mean_xovers: float, rng: random.Random) -> List[int]:
+    k = _poisson_knuth(mean_xovers, rng)
     if k == 0:
         return []
-    # unique breakpoints
     bps = sorted(set(rng.randrange(1, read_len) for _ in range(k)))
-    # remove any exact duplicates (set handled), ensure not at end
-    bps = [b for b in bps if b < read_len]
-    return bps
+    return [b for b in bps if 0 < b < read_len]
 
 def mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int,
                 mean_xovers: float, rng: random.Random) -> str:
-    """
-    Build a recombinant read by alternating haplotypes at random breakpoints.
-    """
     bps = breakpoints_for_read(read_len, mean_xovers, rng)
-    # segment boundaries: [0, bp1, bp2, ..., read_len]
     cuts = [0] + bps + [read_len]
     use_h1_first = rng.choice([True, False])
     out_chunks = []
@@ -114,69 +91,88 @@ def mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int,
             out_chunks.append(h2_seq[s:s+seg_len])
     return "".join(out_chunks)
 
-# -------------------- main --------------------
+# -------------------- core simulator --------------------
 
 def simulate_reads(h1_fa: str, h2_fa: str, read_len: int, n_reads: int,
-                   mean_xovers: float, seed: int, out_path: str):
-    rng = random.Random(seed)
-
-    # load haplotypes
+                   mean_xovers: float, rng: random.Random, out_path: str):
     h1 = read_fasta(h1_fa)
     h2 = read_fasta(h2_fa)
-    contigs = contig_index(h1, h2)
-
-    # filter contigs that can accommodate read_len
-    contigs = [(c, L) for c, L in contigs if L >= read_len]
+    contigs = [(c, L) for c, L in contig_index(h1, h2) if L >= read_len]
     if not contigs:
         raise RuntimeError(f"No contigs >= read_len={read_len} in both haplotypes.")
 
-    # writer (gz or plain)
-    is_gz = out_path.endswith(".gz")
     os.makedirs(Path(out_path).parent, exist_ok=True)
-    if is_gz:
-        out_fh = gzip.open(out_path, "wt")
-    else:
-        out_fh = open(out_path, "w")
-
-    qline = "I" * read_len  # Q40 for HiFi-like
+    out_fh = gzip.open(out_path, "wt") if out_path.endswith(".gz") else open(out_path, "w")
+    qline = "I" * read_len  # Q40 (HiFi-like)
 
     try:
+        prog = st.progress(0, text="Writing reads...")
         for i in range(1, n_reads + 1):
             cname, L = weighted_choice(contigs, rng)
-            # choose start so the whole read fits
             start = rng.randrange(0, L - read_len + 1)
             seq = mosaic_read(h1[cname], h2[cname], start, read_len, mean_xovers, rng)
-            # FASTQ record
-            out_fh.write(f"@simRead_{i}_{cname}:{start}-{start+read_len}\n")
-            out_fh.write(seq + "\n+\n")
-            out_fh.write(qline + "\n")
-            if i % 1000 == 0:
-                # small progress hint for big jobs
-                pass
+            out_fh.write(f"@simRead_{i}_{cname}:{start}-{start+read_len}\n{seq}\n+\n{qline}\n")
+            if i % max(1, n_reads // 100) == 0:
+                prog.progress(min(i / n_reads, 1.0))
+        prog.progress(1.0)
     finally:
         out_fh.close()
 
-def positive_int(x: str) -> int:
-    v = int(x)
-    if v <= 0:
-        raise argparse.ArgumentTypeError("Must be positive")
-    return v
+# -------------------- Streamlit UI --------------------
 
-def main():
-    ap = argparse.ArgumentParser(description="Simulate HiFi-like long reads from recombining haplotypes.")
-    ap.add_argument("--hap1", required=True, help="FASTA for haplotype 1")
-    ap.add_argument("--hap2", required=True, help="FASTA for haplotype 2")
-    ap.add_argument("--read-len", type=positive_int, default=100_000, help="Length of each simulated read (bp)")
-    ap.add_argument("--n-reads", type=positive_int, default=10_000, help="Number of reads to simulate")
-    ap.add_argument("--mean-xovers", type=float, default=1.0,
-                    help="Mean number of crossovers per read (Poisson mean). Set to 0 for no recombination.")
-    ap.add_argument("--seed", type=int, default=42, help="Random seed")
-    ap.add_argument("--out", required=True, help="Output FASTQ(.gz)")
-    args = ap.parse_args()
+st.title("Distortopia: Simulate HiFi long reads from recombining haplotypes")
 
-    simulate_reads(args.hap1, args.hap2, args.read_len, args.n_reads,
-                   args.mean_xovers, args.seed, args.out)
+st.markdown(
+    "Upload **two haplotype FASTA files** (or point to local paths), "
+    "choose a read length and number of reads, and generate a FASTQ.gz of simulated HiFi reads."
+)
 
-if __name__ == "__main__":
-    main()
+colA, colB = st.columns(2)
+with colA:
+    up1 = st.file_uploader("Haplotype 1 FASTA (.fa/.fasta/.fna)", type=["fa", "fasta", "fna"])
+    hap1_path = st.text_input("OR path to haplotype 1 FASTA", value="alt_refs/A_thaliana_hap1.fa")
+with colB:
+    up2 = st.file_uploader("Haplotype 2 FASTA (.fa/.fasta/.fna)", type=["fa", "fasta", "fna"])
+    hap2_path = st.text_input("OR path to haplotype 2 FASTA", value="alt_refs/A_thaliana_hap2.fa")
 
+read_len    = st.number_input("Read length (bp)", min_value=1_000, max_value=2_000_000, value=100_000, step=1_000)
+n_reads     = st.number_input("Number of reads", min_value=1, max_value=5_000_000, value=10_000, step=1_000)
+mean_xovers = st.number_input("Mean crossovers per read", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
+
+repro = st.checkbox("Set seed for reproducibility", value=False)
+seed  = st.number_input("Seed (integer)", min_value=0, max_value=2**31-1, value=42) if repro else None
+
+out_name = st.text_input("Output filename", value="gametes_hifi.fq.gz")
+
+if st.button("Simulate", type="primary"):
+    with tempfile.TemporaryDirectory() as tdir:
+        tdir = Path(tdir)
+
+        # Materialize uploads or use provided paths
+        if up1 is not None:
+            p1 = tdir / "hap1.fa"
+            p1.write_bytes(up1.getbuffer())
+            h1 = str(p1)
+        else:
+            h1 = hap1_path
+
+        if up2 is not None:
+            p2 = tdir / "hap2.fa"
+            p2.write_bytes(up2.getbuffer())
+            h2 = str(p2)
+        else:
+            h2 = hap2_path
+
+        out_path = str(tdir / out_name)
+
+        # RNG: reproducible if seed set; otherwise cryptographic randomness
+        rng = random.Random(seed if seed is not None else int.from_bytes(os.urandom(8), "big"))
+
+        try:
+            with st.spinner("Simulating reads..."):
+                simulate_reads(h1, h2, int(read_len), int(n_reads), float(mean_xovers), rng, out_path)
+            st.success("Done! Download below.")
+            with open(out_path, "rb") as fh:
+                st.download_button("Download FASTQ.gz", fh, file_name=out_name, mime="application/gzip")
+        except Exception as e:
+            st.error(f"Simulation failed: {e}")
