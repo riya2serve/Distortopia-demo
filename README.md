@@ -34,7 +34,8 @@ conda env create --name distortopia --file environment.yml
 1. Download TAIR9 and hardmasked reference genome sequences from [JGI Phytozome](https://phytozome-next.jgi.doe.gov). 
 2. Create index file 
 ```bash
-
+minimap2 -d Athaliana.mmi raw_data/A_thaliana.fna
+minimap2 -d Alyrata.mmi raw_data/A_lyrata.fna
 ```
 ### Explanation of files in variants directory
 [`Athaliana.fna`](Athaliana.fna), [`Alyrata.fna`](Alyrata.fna): parental genome assemblies in FASTA format
