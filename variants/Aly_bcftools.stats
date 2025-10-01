@@ -1,0 +1,96 @@
+# This file was produced by bcftools stats (1.22+htslib-1.22.1) and can be plotted using plot-vcfstats.
+# The command line was:	bcftools stats  variants/Aly_bcftools.vcf
+#
+# Definition of sets:
+# ID	[2]id	[3]tab-separated file names
+ID	0	variants/Aly_bcftools.vcf
+# SN, Summary numbers:
+#   number of records   .. number of data rows in the VCF
+#   number of no-ALTs   .. reference-only sites, ALT is either "." or identical to REF
+#   number of SNPs      .. number of rows with a SNP
+#   number of MNPs      .. number of rows with a MNP, such as CC>TT
+#   number of indels    .. number of rows with an indel
+#   number of others    .. number of rows with other type, for example a symbolic allele or
+#                          a complex substitution, such as ACT>TCGA
+#   number of multiallelic sites     .. number of rows with multiple alternate alleles
+#   number of multiallelic SNP sites .. number of rows with multiple alternate alleles, all SNPs
+# 
+#   Note that rows containing multiple types will be counted multiple times, in each
+#   counter. For example, a row with a SNP and an indel increments both the SNP and
+#   the indel counter.
+# 
+# SN	[2]id	[3]key	[4]value
+SN	0	number of samples:	1
+SN	0	number of records:	524854
+SN	0	number of no-ALTs:	0
+SN	0	number of SNPs:	524854
+SN	0	number of MNPs:	0
+SN	0	number of indels:	0
+SN	0	number of others:	0
+SN	0	number of multiallelic sites:	286
+SN	0	number of multiallelic SNP sites:	286
+# TSTV, transitions/transversions
+#   - transitions, see https://en.wikipedia.org/wiki/Transition_(genetics)
+#   - transversions, see https://en.wikipedia.org/wiki/Transversion
+# TSTV	[2]id	[3]ts	[4]tv	[5]ts/tv	[6]ts (1st ALT)	[7]tv (1st ALT)	[8]ts/tv (1st ALT)
+TSTV	0	174931	350209	0.50	174833	350021	0.50
+# SiS, Singleton stats:
+#   - allele count, i.e. the number of singleton genotypes (AC=1)
+#   - number of transitions, see above
+#   - number of transversions, see above
+#   - repeat-consistent, inconsistent and n/a: experimental and useless stats [DEPRECATED]
+# SiS	[2]id	[3]allele count	[4]number of SNPs	[5]number of transitions	[6]number of transversions	[7]number of indels	[8]repeat-consistent	[9]repeat-inconsistent	[10]not applicable
+SiS	0	1	98769	32702	66067	0	0	0	0
+# AF, Stats by non-reference allele frequency:
+# AF	[2]id	[3]allele frequency	[4]number of SNPs	[5]number of transitions	[6]number of transversions	[7]number of indels	[8]repeat-consistent	[9]repeat-inconsistent	[10]not applicable
+AF	0	0.000000	98769	32702	66067	0	0	0	0
+AF	0	0.990000	426371	142229	284142	0	0	0	0
+# QUAL, Stats by quality
+# QUAL	[2]id	[3]Quality	[4]number of SNPs	[5]number of transitions (1st ALT)	[6]number of transversions (1st ALT)	[7]number of indels
+QUAL	0	3.7	84918	28068	56850	0
+QUAL	0	10.7	371609	123896	247713	0
+QUAL	0	12.9	279	105	174	0
+QUAL	0	26.2	197	72	125	0
+QUAL	0	29.4	2850	925	1925	0
+QUAL	0	30.9	8784	2978	5806	0
+QUAL	0	41.5	66	20	46	0
+QUAL	0	43.4	50202	16818	33384	0
+QUAL	0	54.2	216	73	143	0
+QUAL	0	55.1	1103	340	763	0
+QUAL	0	65.8	7	1	6	0
+QUAL	0	66.4	8	3	5	0
+QUAL	0	70.4	4088	1353	2735	0
+QUAL	0	74.5	129	42	87	0
+QUAL	0	87.8	2	1	1	0
+QUAL	0	92.4	394	138	256	0
+QUAL	0	110.4	2	0	2	0
+# IDD, InDel distribution:
+# IDD	[2]id	[3]length (deletions negative)	[4]number of sites	[5]number of genotypes	[6]mean VAF
+# ST, Substitution types:
+# ST	[2]id	[3]type	[4]count
+ST	0	A>C	56442
+ST	0	A>G	56221
+ST	0	A>T	56160
+ST	0	C>A	30991
+ST	0	C>G	31421
+ST	0	C>T	31078
+ST	0	G>A	31146
+ST	0	G>C	31372
+ST	0	G>T	31193
+ST	0	T>A	56265
+ST	0	T>C	56486
+ST	0	T>G	56365
+# DP, depth:
+#   - set id, see above
+#   - the depth bin, corresponds to the depth (unless --depth was given)
+#   - number of genotypes with this depth (zero unless -s/-S was given)
+#   - fraction of genotypes with this depth (zero unless -s/-S was given)
+#   - number of sites with this depth
+#   - fraction of sites with this depth
+# DP, Depth distribution
+# DP	[2]id	[3]bin	[4]number of genotypes	[5]fraction of genotypes (%)	[6]number of sites	[7]fraction of sites (%)
+DP	0	1	0	0.000000	371609	70.802356
+DP	0	2	0	0.000000	135399	25.797460
+DP	0	3	0	0.000000	12938	2.465066
+DP	0	4	0	0.000000	4362	0.831088
+DP	0	5	0	0.000000	546	0.104029

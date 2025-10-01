@@ -1,0 +1,97 @@
+# This file was produced by bcftools stats (1.22+htslib-1.22.1) and can be plotted using plot-vcfstats.
+# The command line was:	bcftools stats  variants/Athal_bcftools.vcf
+#
+# Definition of sets:
+# ID	[2]id	[3]tab-separated file names
+ID	0	variants/Athal_bcftools.vcf
+# SN, Summary numbers:
+#   number of records   .. number of data rows in the VCF
+#   number of no-ALTs   .. reference-only sites, ALT is either "." or identical to REF
+#   number of SNPs      .. number of rows with a SNP
+#   number of MNPs      .. number of rows with a MNP, such as CC>TT
+#   number of indels    .. number of rows with an indel
+#   number of others    .. number of rows with other type, for example a symbolic allele or
+#                          a complex substitution, such as ACT>TCGA
+#   number of multiallelic sites     .. number of rows with multiple alternate alleles
+#   number of multiallelic SNP sites .. number of rows with multiple alternate alleles, all SNPs
+# 
+#   Note that rows containing multiple types will be counted multiple times, in each
+#   counter. For example, a row with a SNP and an indel increments both the SNP and
+#   the indel counter.
+# 
+# SN	[2]id	[3]key	[4]value
+SN	0	number of samples:	1
+SN	0	number of records:	767940
+SN	0	number of no-ALTs:	0
+SN	0	number of SNPs:	767940
+SN	0	number of MNPs:	0
+SN	0	number of indels:	0
+SN	0	number of others:	0
+SN	0	number of multiallelic sites:	626
+SN	0	number of multiallelic SNP sites:	626
+# TSTV, transitions/transversions
+#   - transitions, see https://en.wikipedia.org/wiki/Transition_(genetics)
+#   - transversions, see https://en.wikipedia.org/wiki/Transversion
+# TSTV	[2]id	[3]ts	[4]tv	[5]ts/tv	[6]ts (1st ALT)	[7]tv (1st ALT)	[8]ts/tv (1st ALT)
+TSTV	0	256273	512293	0.50	256065	511875	0.50
+# SiS, Singleton stats:
+#   - allele count, i.e. the number of singleton genotypes (AC=1)
+#   - number of transitions, see above
+#   - number of transversions, see above
+#   - repeat-consistent, inconsistent and n/a: experimental and useless stats [DEPRECATED]
+# SiS	[2]id	[3]allele count	[4]number of SNPs	[5]number of transitions	[6]number of transversions	[7]number of indels	[8]repeat-consistent	[9]repeat-inconsistent	[10]not applicable
+SiS	0	1	230375	76658	153717	0	0	0	0
+# AF, Stats by non-reference allele frequency:
+# AF	[2]id	[3]allele frequency	[4]number of SNPs	[5]number of transitions	[6]number of transversions	[7]number of indels	[8]repeat-consistent	[9]repeat-inconsistent	[10]not applicable
+AF	0	0.000000	230375	76658	153717	0	0	0	0
+AF	0	0.990000	538191	179615	358576	0	0	0	0
+# QUAL, Stats by quality
+# QUAL	[2]id	[3]Quality	[4]number of SNPs	[5]number of transitions (1st ALT)	[6]number of transversions (1st ALT)	[7]number of indels
+QUAL	0	3.7	178193	59338	118855	0
+QUAL	0	10.7	424373	141696	282677	0
+QUAL	0	12.9	603	195	408	0
+QUAL	0	26.2	765	248	517	0
+QUAL	0	29.4	7086	2359	4727	0
+QUAL	0	30.9	37792	12526	25266	0
+QUAL	0	41.5	251	80	171	0
+QUAL	0	43.4	98026	32725	65301	0
+QUAL	0	54.2	754	231	523	0
+QUAL	0	55.1	4120	1403	2717	0
+QUAL	0	65.8	15	6	9	0
+QUAL	0	66.4	30	15	15	0
+QUAL	0	70.4	14609	4800	9809	0
+QUAL	0	74.5	413	142	271	0
+QUAL	0	87.8	1	0	1	0
+QUAL	0	88.6	8	2	6	0
+QUAL	0	92.4	725	236	489	0
+QUAL	0	110.4	176	63	113	0
+# IDD, InDel distribution:
+# IDD	[2]id	[3]length (deletions negative)	[4]number of sites	[5]number of genotypes	[6]mean VAF
+# ST, Substitution types:
+# ST	[2]id	[3]type	[4]count
+ST	0	A>C	81504
+ST	0	A>G	81451
+ST	0	A>T	81850
+ST	0	C>A	46571
+ST	0	C>G	46233
+ST	0	C>T	46424
+ST	0	G>A	46178
+ST	0	G>C	46529
+ST	0	G>T	46338
+ST	0	T>A	81447
+ST	0	T>C	82220
+ST	0	T>G	81821
+# DP, depth:
+#   - set id, see above
+#   - the depth bin, corresponds to the depth (unless --depth was given)
+#   - number of genotypes with this depth (zero unless -s/-S was given)
+#   - fraction of genotypes with this depth (zero unless -s/-S was given)
+#   - number of sites with this depth
+#   - fraction of sites with this depth
+# DP, Depth distribution
+# DP	[2]id	[3]bin	[4]number of genotypes	[5]fraction of genotypes (%)	[6]number of sites	[7]fraction of sites (%)
+DP	0	1	0	0.000000	424373	55.261218
+DP	0	2	0	0.000000	276822	36.047347
+DP	0	3	0	0.000000	52652	6.856265
+DP	0	4	0	0.000000	11976	1.559497
+DP	0	5	0	0.000000	2117	0.275673
