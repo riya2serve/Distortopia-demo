@@ -118,6 +118,7 @@ def bcftools_call_and_filter(
     vcf_gz, norm_vcf_gz, filt_vcf_gz = auto_out_vcfs(bam_p)
 
     # 1) mpileup -> call
+    
     with st.spinner(f"bcftools call → {vcf_gz.name}"):
     ploidy_flag = "" if ploidy_mode == "diploid" else "--ploidy 1"
     anno = "FORMAT/AD,FORMAT/DP,FORMAT/SP,INFO/MQ"  # <- namespaced tags
@@ -131,9 +132,9 @@ def bcftools_call_and_filter(
             f"&& bcftools index -t {vcf_gz}"
         )
     ]
-    run_cmd_text(cmd)
+        run_cmd_text(cmd)
 
-n_all = vcf_count_records(vcf_gz)
+    n_all = vcf_count_records(vcf_gz)
 
     # 2) normalize (optional)
     src_vcf = vcf_gz
