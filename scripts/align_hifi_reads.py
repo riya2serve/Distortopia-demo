@@ -119,20 +119,21 @@ def bcftools_call_and_filter(
 
     # 1) mpileup -> call
     with st.spinner(f"bcftools call → {vcf_gz.name}"):
-        ploidy_flag = "" if ploidy_mode == "diploid" else "--ploidy 1"
-        cmd = [
-            "bash", "-lc",
-            (
-                "set -o pipefail; "
-                f"bcftools mpileup -f {ref_fa} -q {mapq_min} -Q {baseq_min} "
-                f"-Ou -a AD,DP,SP,MQ {bam_p} "
-                f"| bcftools call {ploidy_flag} -mv -Oz -o {vcf_gz} "
-                f"&& bcftools index -t {vcf_gz}"
-            )
-        ]
-        run_cmd_text(cmd)
+    ploidy_flag = "" if ploidy_mode == "diploid" else "--ploidy 1"
+    anno = "FORMAT/AD,FORMAT/DP,FORMAT/SP,INFO/MQ"  # <- namespaced tags
+    cmd = [
+        "bash", "-lc",
+        (
+            "set -o pipefail; "
+            f"bcftools mpileup -f {ref_fa} -q {mapq_min} -Q {baseq_min} "
+            f"-Ou -a {anno} {bam_p} "
+            f"| bcftools call {ploidy_flag} -mv -Oz -o {vcf_gz} "
+            f"&& bcftools index -t {vcf_gz}"
+        )
+    ]
+    run_cmd_text(cmd)
 
-    n_all = vcf_count_records(vcf_gz)
+n_all = vcf_count_records(vcf_gz)
 
     # 2) normalize (optional)
     src_vcf = vcf_gz
