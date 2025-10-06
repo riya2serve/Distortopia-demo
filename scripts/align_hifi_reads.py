@@ -21,10 +21,19 @@ def run_pipe_to_file(p1, p2, outfile):
         raise RuntimeError("samtools sort failed")
 
 def run_cmd_text(cmd) -> str:
-    """Run a command and return stdout as text; raise on non-zero."""
+    """Run a command and return stdout; on failure, surface stderr (incl. pipes)."""
     st.code("$ " + " ".join(cmd))
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    return out.stdout
+    try:
+        out = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return out.stdout
+    except subprocess.CalledProcessError as e:
+        msg = []
+        if e.stdout:
+            msg.append("STDOUT:\n" + e.stdout.strip())
+        if e.stderr:
+            msg.append("STDERR:\n" + e.stderr.strip())
+        st.error("Command failed:\n" + ("\n\n".join(msg) or "<no output>"))
+        raise
 
 def parse_flagstat(txt: str) -> dict:
     d = {"total": None, "mapped": None, "primary_mapped": None}
@@ -51,19 +60,28 @@ def auto_out_bam(reads_path: Path, ref_path: Path, outdir: Path) -> Path:
     return outdir / f"{r}__to__{ref}.bam"
 
 def auto_out_vcfs(bam_path: Path) -> Tuple[Path, Path, Path]:
-    """Generate output VCF paths (inside repo's data/ folder)."""
-    base_name = bam_path.stem  # e.g., Atha_to_Alyr.bam -> Atha_to_Alyr
+    """VCF paths go to repo's data/ folder; ensure it exists."""
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
-    vcf_gz = data_dir / f"{base_name}.vcf.gz"
-    norm_vcf_gz = data_dir / f"{base_name}.norm.vcf.gz"
-    filt_vcf_gz = data_dir / f"{base_name}.filtered.vcf.gz"
+    base = bam_path.stem
+    vcf_gz      = data_dir / f"{base}.vcf.gz"
+    norm_vcf_gz = data_dir / f"{base}.norm.vcf.gz"
+    filt_vcf_gz = data_dir / f"{base}.filtered.vcf.gz"
     return vcf_gz, norm_vcf_gz, filt_vcf_gz
 
 def ensure_fasta_index(ref_fa: Path):
+    """Ensure reference FASTA has .fai index."""
     fai = ref_fa.with_suffix(ref_fa.suffix + ".fai")
     if not fai.exists():
         run_cmd_text(["samtools", "faidx", str(ref_fa)])
+
+def ensure_bam_index(bam_p: Path):
+    """Ensure BAM is indexed; quickcheck the BAM."""
+    bai = Path(str(bam_p) + ".bai")
+    if not bai.exists():
+        run_cmd_text(["samtools", "index", str(bam_p)])
+    # prints nothing if OK; raises if not
+    run_cmd_text(["bash", "-lc", f"set -e; samtools quickcheck -v {bam_p} >/dev/null || exit 1"])
 
 def vcf_count_records(vcf_path: Path) -> int:
     """Count variant records quickly."""
@@ -80,25 +98,23 @@ def bcftools_call_and_filter(
     mapq_min: int,
     baseq_min: int,
     normalize: bool,
-    ploidy_mode: str,
+    ploidy_mode: str,   # "diploid" or "haploid"
     qual_min: int,
     require_pass: bool,
 ) -> Tuple[Path, Optional[Path], Path, int, int]:
     """
-    Call variants and produce three outputs (VCF, normalized, filtered)
-    directly inside the repo's data/ folder.
-    Filter enforces:
-      - SNPs only (no INDELs/MNPs)
-      - Bi-allelic sites only
-      - QUAL > threshold
-      - Heterozygous GT (diploid only)
-      - FILTER="PASS" if toggled
+    Call variants and produce three outputs into data/:
+      - *.vcf.gz (all calls)
+      - *.norm.vcf.gz (optional)
+      - *.filtered.vcf.gz (SNPs only, biallelic, QUAL>qual_min, het if diploid, optional PASS)
+    Returns: vcf_gz, norm_vcf_gz_or_None, filt_vcf_gz, n_all, n_filtered
     """
     if not check_tool("bcftools"):
         st.error("`bcftools` not found. Try: `conda install -c bioconda bcftools`")
         st.stop()
 
     ensure_fasta_index(ref_fa)
+    ensure_bam_index(bam_p)
     vcf_gz, norm_vcf_gz, filt_vcf_gz = auto_out_vcfs(bam_p)
 
     # 1) mpileup -> call
@@ -107,13 +123,15 @@ def bcftools_call_and_filter(
         cmd = [
             "bash", "-lc",
             (
+                "set -o pipefail; "
                 f"bcftools mpileup -f {ref_fa} -q {mapq_min} -Q {baseq_min} "
-                f"-Ou -a AD,DP,SP,MQ {bam_p} | "
-                f"bcftools call {ploidy_flag} -mv -Oz -o {vcf_gz} && "
-                f"bcftools index -t {vcf_gz}"
+                f"-Ou -a AD,DP,SP,MQ {bam_p} "
+                f"| bcftools call {ploidy_flag} -mv -Oz -o {vcf_gz} "
+                f"&& bcftools index -t {vcf_gz}"
             )
         ]
         run_cmd_text(cmd)
+
     n_all = vcf_count_records(vcf_gz)
 
     # 2) normalize (optional)
@@ -124,41 +142,43 @@ def bcftools_call_and_filter(
             run_cmd_text(["bcftools", "index", "-t", str(norm_vcf_gz)])
         src_vcf = norm_vcf_gz
 
-    # 3) strict filtering (SNPs only, biallelic, QUAL>30, het)
-    with st.spinner(f"Filter HQ het SNPs → {filt_vcf_gz.name}"):
+    # 3) strict filtered VCF
+    with st.spinner(f"Filter HQ biallelic het SNPs → {filt_vcf_gz.name}"):
         clauses = [f"QUAL>{qual_min}"]
         if require_pass:
             clauses.append('FILTER="PASS"')
         if ploidy_mode == "diploid":
-            clauses.append('GT="het"')
+            clauses.append('GT="het"')  # haploid cannot be het
         expr = " && ".join(clauses)
 
         run_cmd_text([
             "bcftools", "view",
-            "-v", "snps", "-m2", "-M2",
-            "-i", expr,
+            "-v", "snps",       # exclude INDELs & MNPs
+            "-m2", "-M2",       # biallelic only
+            "-i", expr,         # QUAL / PASS / GT
             "-Oz", "-o", str(filt_vcf_gz), str(src_vcf)
         ])
         run_cmd_text(["bcftools", "index", "-t", str(filt_vcf_gz)])
-    n_filtered = vcf_count_records(filt_vcf_gz)
 
+    n_filtered = vcf_count_records(filt_vcf_gz)
     return vcf_gz, (norm_vcf_gz if normalize else None), filt_vcf_gz, n_all, n_filtered
 
 # ------------------ UI ------------------
 st.title("Distortopia: Cross-map HiFi reads + bcftools calling → data/")
 
 st.markdown("""
-This app aligns simulated HiFi reads to two reference genomes (2×2 matrix),
-then calls variants and writes VCFs into the repo’s **data/** folder.
+Align simulated HiFi reads to two references (2×2 matrix), then call variants and
+write VCFs into the repo’s **data/** folder. Filtered VCFs keep **biallelic SNPs only** with **QUAL>30**
+and **heterozygous GT** (in diploid mode).
 """)
 
 col1, col2 = st.columns(2)
 with col1:
     ref1 = st.text_input("Reference FASTA #1", value="raw_data/A_thaliana.fna")
-    reads1 = st.text_input("Reads FASTQ #1", value="reads/Athal_gametes_hifi.fq.gz")
+    reads1 = st.text_input("Reads FASTQ #1", value="long_reads/Athaliana_gametes_hifi.fq.gz")
 with col2:
     ref2 = st.text_input("Reference FASTA #2", value="raw_data/A_lyrata.fna")
-    reads2 = st.text_input("Reads FASTQ #2", value="reads/Aly_gametes_hifi.fq.gz")
+    reads2 = st.text_input("Reads FASTQ #2", value="long_reads/Alyrata_gametes_hifi.fq.gz")
 
 threads = st.number_input("Threads (minimap2)", min_value=1, max_value=64, value=8)
 outdir = Path(st.text_input("BAM output directory", value="alignments"))
@@ -179,14 +199,15 @@ with c3:
 
 c4, c5, c6 = st.columns(3)
 with c4:
-    mapq_min = st.number_input("Read MAPQ ≥", 0, 60, 20)
+    mapq_min = st.number_input("Read MAPQ ≥", 0, 60, 30)
 with c5:
-    baseq_min = st.number_input("Base QUAL ≥", 0, 60, 20)
+    baseq_min = st.number_input("Base QUAL ≥", 0, 60, 30)
 with c6:
     qual_min = st.number_input("VCF QUAL >", 0, 500, 30)
 
 # ------------------ main ------------------
 if st.button("Run cross-alignments", type="primary"):
+    # tool checks
     if not check_tool("minimap2") or not check_tool("samtools"):
         st.error("Please install minimap2 and samtools (`conda install -c bioconda minimap2 samtools`)")
         st.stop()
@@ -194,6 +215,7 @@ if st.button("Run cross-alignments", type="primary"):
         st.error("Please install bcftools (`conda install -c bioconda bcftools`)")
         st.stop()
 
+    # paths
     ref_paths = [Path(ref1), Path(ref2)]
     read_paths = [Path(reads1), Path(reads2)]
     missing = [str(p) for p in (ref_paths + read_paths) if not p.exists()]
@@ -216,11 +238,15 @@ if st.button("Run cross-alignments", type="primary"):
             with st.spinner(f"Index {bam_p.name}"):
                 run_cmd_text(["samtools", "index", str(bam_p)])
 
-        fs = parse_flagstat(run_cmd_text(["samtools", "flagstat", str(bam_p)]))
+        fs_text = run_cmd_text(["samtools", "flagstat", str(bam_p)])
+        fs = parse_flagstat(fs_text)
         total = fs.get("total") or 0
-        mapped = fs.get("mapped") or 0
         primary = fs.get("primary_mapped") or 0
         pct_primary = (primary / total * 100) if total > 0 else 0.0
+
+        if show_flagstat:
+            st.caption("`samtools flagstat` (raw)")
+            st.code(fs_text)
 
         row = {
             "reads": reads_p.name,
@@ -244,7 +270,8 @@ if st.button("Run cross-alignments", type="primary"):
 
             st.caption("VCF outputs written to data/")
             st.code(f"{vcf_gz.name} (all) → {n_all} sites\n"
-                    f"{filt_vcf_gz.name} (filtered) → {n_filt} HQ het SNPs")
+                    f"{(Path(norm_vcf_gz).name if norm_vcf_gz else '')}\n"
+                    f"{filt_vcf_gz.name} (filtered) → {n_filt} HQ SNPs")
 
             row.update({
                 "vcf_all": str(vcf_gz),
@@ -256,6 +283,7 @@ if st.button("Run cross-alignments", type="primary"):
 
         results.append(row)
 
+    # tables
     df = pd.DataFrame(results)
     st.subheader("Per-pair summary")
     st.dataframe(df, use_container_width=True)
