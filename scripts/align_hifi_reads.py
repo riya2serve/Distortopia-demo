@@ -2,6 +2,7 @@
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Tuple, Optional
 import pandas as pd
 import streamlit as st
 
@@ -10,7 +11,7 @@ def check_tool(name: str) -> bool:
     return shutil.which(name) is not None
 
 def run_pipe_to_file(p1, p2, outfile):
-    """minimap2 SAM -> samtools sort -> BAM"""
+    """Run p1 | p2 -o outfile  (minimap2 -> samtools sort -> BAM)."""
     st.code("$ " + " ".join(p1) + " | " + " ".join(p2 + ["-o", outfile]))
     p_minimap = subprocess.Popen(p1, stdout=subprocess.PIPE)
     p_sort = subprocess.Popen(p2 + ["-o", outfile], stdin=p_minimap.stdout)
@@ -19,93 +20,190 @@ def run_pipe_to_file(p1, p2, outfile):
     if rc != 0:
         raise RuntimeError("samtools sort failed")
 
-def run_cmd_text(cmd):
+def run_cmd_text(cmd) -> str:
+    """Run a command and return stdout as text; raise on non-zero."""
     st.code("$ " + " ".join(cmd))
     out = subprocess.run(cmd, check=True, capture_output=True, text=True)
     return out.stdout
 
 def parse_flagstat(txt: str) -> dict:
-    """
-    Robust-ish parser across samtools versions.
-    We want:
-      - total reads
-      - mapped (includes secondary/supplementary)
-      - primary mapped (unique primary alignments)
-    """
     d = {"total": None, "mapped": None, "primary_mapped": None}
     for line in txt.splitlines():
         ls = line.strip()
         if " in total" in ls and d["total"] is None:
-            # e.g. "1016 + 0 in total ..."
             d["total"] = int(ls.split()[0])
         elif " mapped (" in ls and "primary" not in ls and d["mapped"] is None:
-            # e.g. "1016 + 0 mapped (100.00% : N/A)"
             d["mapped"] = int(ls.split()[0])
         elif "primary mapped" in ls and d["primary_mapped"] is None:
-            # e.g. "1000 + 0 primary mapped (98.43% : N/A)"
             d["primary_mapped"] = int(ls.split()[0])
     return d
 
 def auto_out_bam(reads_path: Path, ref_path: Path, outdir: Path) -> Path:
-    r = reads_path.stem  # .fq or .fq.gz → "stem" will give "fq" if .gz; handle nicer:
-    if reads_path.name.endswith(".fq.gz") or reads_path.name.endswith(".fastq.gz"):
-        r = reads_path.name.rsplit(".fq.gz", 1)[0].rsplit(".fastq.gz", 1)[0]
-    elif reads_path.suffix in (".fq", ".fastq"):
+    """Generate BAM output name for a reads–reference pair."""
+    rname = reads_path.name
+    if rname.endswith(".fq.gz"):
+        r = rname[:-6]
+    elif rname.endswith(".fastq.gz"):
+        r = rname[:-9]
+    else:
         r = reads_path.stem
     ref = ref_path.stem
     return outdir / f"{r}__to__{ref}.bam"
 
-# ------------------ UI ------------------
-st.title("Distortopia: Cross-map HiFi reads to references (2×2 matrix)")
+def auto_out_vcfs(bam_path: Path) -> Tuple[Path, Path, Path]:
+    """Generate output VCF paths (inside repo's data/ folder)."""
+    base_name = bam_path.stem  # e.g., Atha_to_Alyr.bam -> Atha_to_Alyr
+    data_dir = Path("data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    vcf_gz = data_dir / f"{base_name}.vcf.gz"
+    norm_vcf_gz = data_dir / f"{base_name}.norm.vcf.gz"
+    filt_vcf_gz = data_dir / f"{base_name}.filtered.vcf.gz"
+    return vcf_gz, norm_vcf_gz, filt_vcf_gz
 
-with st.expander("Requirements", expanded=False):
-    st.markdown("""
-- **minimap2** (preset `map-hifi`)
-- **samtools** (for `sort`, `index`, `flagstat`)
-- Inputs may be plain `.fq/.fastq` or gzipped `.fq.gz/.fastq.gz`.
+def ensure_fasta_index(ref_fa: Path):
+    fai = ref_fa.with_suffix(ref_fa.suffix + ".fai")
+    if not fai.exists():
+        run_cmd_text(["samtools", "faidx", str(ref_fa)])
+
+def vcf_count_records(vcf_path: Path) -> int:
+    """Count variant records quickly."""
+    cmd = ["bash", "-lc", f"bcftools view -H {vcf_path} | wc -l"]
+    out = run_cmd_text(cmd)
+    try:
+        return int(out.strip())
+    except Exception:
+        return 0
+
+def bcftools_call_and_filter(
+    ref_fa: Path,
+    bam_p: Path,
+    mapq_min: int,
+    baseq_min: int,
+    normalize: bool,
+    ploidy_mode: str,
+    qual_min: int,
+    require_pass: bool,
+) -> Tuple[Path, Optional[Path], Path, int, int]:
+    """
+    Call variants and produce three outputs (VCF, normalized, filtered)
+    directly inside the repo's data/ folder.
+    Filter enforces:
+      - SNPs only (no INDELs/MNPs)
+      - Bi-allelic sites only
+      - QUAL > threshold
+      - Heterozygous GT (diploid only)
+      - FILTER="PASS" if toggled
+    """
+    if not check_tool("bcftools"):
+        st.error("`bcftools` not found. Try: `conda install -c bioconda bcftools`")
+        st.stop()
+
+    ensure_fasta_index(ref_fa)
+    vcf_gz, norm_vcf_gz, filt_vcf_gz = auto_out_vcfs(bam_p)
+
+    # 1) mpileup -> call
+    with st.spinner(f"bcftools call → {vcf_gz.name}"):
+        ploidy_flag = "" if ploidy_mode == "diploid" else "--ploidy 1"
+        cmd = [
+            "bash", "-lc",
+            (
+                f"bcftools mpileup -f {ref_fa} -q {mapq_min} -Q {baseq_min} "
+                f"-Ou -a AD,DP,SP,MQ {bam_p} | "
+                f"bcftools call {ploidy_flag} -mv -Oz -o {vcf_gz} && "
+                f"bcftools index -t {vcf_gz}"
+            )
+        ]
+        run_cmd_text(cmd)
+    n_all = vcf_count_records(vcf_gz)
+
+    # 2) normalize (optional)
+    src_vcf = vcf_gz
+    if normalize:
+        with st.spinner(f"bcftools norm → {norm_vcf_gz.name}"):
+            run_cmd_text(["bcftools", "norm", "-f", str(ref_fa), "-Oz", "-o", str(norm_vcf_gz), str(vcf_gz)])
+            run_cmd_text(["bcftools", "index", "-t", str(norm_vcf_gz)])
+        src_vcf = norm_vcf_gz
+
+    # 3) strict filtering (SNPs only, biallelic, QUAL>30, het)
+    with st.spinner(f"Filter HQ het SNPs → {filt_vcf_gz.name}"):
+        clauses = [f"QUAL>{qual_min}"]
+        if require_pass:
+            clauses.append('FILTER="PASS"')
+        if ploidy_mode == "diploid":
+            clauses.append('GT="het"')
+        expr = " && ".join(clauses)
+
+        run_cmd_text([
+            "bcftools", "view",
+            "-v", "snps", "-m2", "-M2",
+            "-i", expr,
+            "-Oz", "-o", str(filt_vcf_gz), str(src_vcf)
+        ])
+        run_cmd_text(["bcftools", "index", "-t", str(filt_vcf_gz)])
+    n_filtered = vcf_count_records(filt_vcf_gz)
+
+    return vcf_gz, (norm_vcf_gz if normalize else None), filt_vcf_gz, n_all, n_filtered
+
+# ------------------ UI ------------------
+st.title("Distortopia: Cross-map HiFi reads + bcftools calling → data/")
+
+st.markdown("""
+This app aligns simulated HiFi reads to two reference genomes (2×2 matrix),
+then calls variants and writes VCFs into the repo’s **data/** folder.
 """)
 
-# Inputs
 col1, col2 = st.columns(2)
 with col1:
     ref1 = st.text_input("Reference FASTA #1", value="raw_data/A_thaliana.fna")
-    reads1 = st.text_input("Reads FASTQ #1", value="reads/Athal_gametes_hifi.fq")
+    reads1 = st.text_input("Reads FASTQ #1", value="reads/Athal_gametes_hifi.fq.gz")
 with col2:
     ref2 = st.text_input("Reference FASTA #2", value="raw_data/A_lyrata.fna")
-    reads2 = st.text_input("Reads FASTQ #2", value="reads/Aly_gametes_hifi.fq")
+    reads2 = st.text_input("Reads FASTQ #2", value="reads/Aly_gametes_hifi.fq.gz")
 
-threads = st.number_input("Threads", min_value=1, max_value=64, value=8)
-outdir  = Path(st.text_input("Output directory for BAMs", value="alignments"))
+threads = st.number_input("Threads (minimap2)", min_value=1, max_value=64, value=8)
+outdir = Path(st.text_input("BAM output directory", value="alignments"))
 index_bam = st.checkbox("Index BAMs (samtools index)", value=True)
 show_flagstat = st.checkbox("Show per-pair flagstat", value=False)
 
+st.markdown("---")
+st.subheader("bcftools settings")
+call_variants = st.checkbox("Call variants for each BAM", value=True)
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    ploidy_mode = st.selectbox("Genotype ploidy", ["diploid", "haploid"], index=0)
+with c2:
+    normalize_vcf = st.checkbox("Normalize VCF (bcftools norm)", value=True)
+with c3:
+    require_pass = st.checkbox('Require FILTER="PASS"', value=True)
+
+c4, c5, c6 = st.columns(3)
+with c4:
+    mapq_min = st.number_input("Read MAPQ ≥", 0, 60, 20)
+with c5:
+    baseq_min = st.number_input("Base QUAL ≥", 0, 60, 20)
+with c6:
+    qual_min = st.number_input("VCF QUAL >", 0, 500, 30)
+
+# ------------------ main ------------------
 if st.button("Run cross-alignments", type="primary"):
-    # Tool checks
-    if not check_tool("minimap2"):
-        st.error("`minimap2` not found on PATH. Try: `conda install -c bioconda minimap2`")
+    if not check_tool("minimap2") or not check_tool("samtools"):
+        st.error("Please install minimap2 and samtools (`conda install -c bioconda minimap2 samtools`)")
         st.stop()
-    if not check_tool("samtools"):
-        st.error("`samtools` not found on PATH. Try: `conda install -c bioconda samtools`")
+    if call_variants and not check_tool("bcftools"):
+        st.error("Please install bcftools (`conda install -c bioconda bcftools`)")
         st.stop()
 
-    # Resolve paths and existence
-    ref_paths  = [Path(ref1), Path(ref2)]
+    ref_paths = [Path(ref1), Path(ref2)]
     read_paths = [Path(reads1), Path(reads2)]
-    for p in ref_paths + read_paths:
-        if not p.exists():
-            st.error(f"Missing file: {p}")
-            st.stop()
+    missing = [str(p) for p in (ref_paths + read_paths) if not p.exists()]
+    if missing:
+        st.error("Missing file(s):\n" + "\n".join(missing))
+        st.stop()
 
     outdir.mkdir(parents=True, exist_ok=True)
-
-    # Build the 2×2 jobs: each reads vs each ref
-    jobs = []
-    for r in read_paths:
-        for ref in ref_paths:
-            bam = auto_out_bam(r, ref, outdir)
-            jobs.append((r, ref, bam))
-
-    results = []  # one row per pair
+    jobs = [(r, ref, auto_out_bam(r, ref, outdir)) for r in read_paths for ref in ref_paths]
+    results = []
 
     for reads_p, ref_p, bam_p in jobs:
         st.subheader(f"Map {reads_p.name} → {ref_p.name}")
@@ -118,48 +216,52 @@ if st.button("Run cross-alignments", type="primary"):
             with st.spinner(f"Index {bam_p.name}"):
                 run_cmd_text(["samtools", "index", str(bam_p)])
 
-        # flagstat
-        fs = parse_flagstat(run_cmd_text(["samtools", "flagstat", str(bam_p) ]))
+        fs = parse_flagstat(run_cmd_text(["samtools", "flagstat", str(bam_p)]))
         total = fs.get("total") or 0
         mapped = fs.get("mapped") or 0
         primary = fs.get("primary_mapped") or 0
         pct_primary = (primary / total * 100) if total > 0 else 0.0
 
-        if show_flagstat:
-            st.caption("`samtools flagstat` (raw)")
-            st.code(run_cmd_text(["samtools", "flagstat", str(bam_p)]))
-
-        results.append({
+        row = {
             "reads": reads_p.name,
             "ref": ref_p.name,
             "bam": str(bam_p),
-            "total_reads": total,
-            "mapped_reads": mapped,
-            "mapped_primary": primary,
             "pct_mapped_primary": round(pct_primary, 2),
-        })
+        }
 
-    # Detailed per-pair table
-    st.subheader("Per-pair summary")
+        # ---- bcftools pipeline ----
+        if call_variants:
+            vcf_gz, norm_vcf_gz, filt_vcf_gz, n_all, n_filt = bcftools_call_and_filter(
+                ref_fa=ref_p,
+                bam_p=bam_p,
+                mapq_min=int(mapq_min),
+                baseq_min=int(baseq_min),
+                normalize=bool(normalize_vcf),
+                ploidy_mode=ploidy_mode,
+                qual_min=int(qual_min),
+                require_pass=bool(require_pass),
+            )
+
+            st.caption("VCF outputs written to data/")
+            st.code(f"{vcf_gz.name} (all) → {n_all} sites\n"
+                    f"{filt_vcf_gz.name} (filtered) → {n_filt} HQ het SNPs")
+
+            row.update({
+                "vcf_all": str(vcf_gz),
+                "vcf_norm": str(norm_vcf_gz) if norm_vcf_gz else "",
+                "vcf_filtered": str(filt_vcf_gz),
+                "variants_all": n_all,
+                "variants_filtered": n_filt,
+            })
+
+        results.append(row)
+
     df = pd.DataFrame(results)
+    st.subheader("Per-pair summary")
     st.dataframe(df, use_container_width=True)
 
-    # 2×2 matrix (rows: reads; cols: ref; values: % primary mapped)
-    st.subheader("Primary-mapping % matrix (reads × reference)")
+    st.subheader("Primary-mapping % matrix (reads × ref)")
     mat = df.pivot(index="reads", columns="ref", values="pct_mapped_primary").fillna(0)
     st.dataframe(mat, use_container_width=True)
 
-    # Download buttons
-    st.subheader("Download BAMs")
-    for row in results:
-        bam = Path(row["bam"])
-        if bam.exists():
-            with open(bam, "rb") as fh:
-                st.download_button(f"Download {bam.name}", fh, file_name=bam.name)
-        bai = bam.with_suffix(bam.suffix + ".bai")
-        if bai.exists():
-            with open(bai, "rb") as fh:
-                st.download_button(f"Download {bai.name}", fh, file_name=bai.name)
-
-    st.success("Cross-alignments complete.")
-
+    st.success("Cross-alignments + bcftools variant calling complete.")
