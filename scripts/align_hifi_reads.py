@@ -121,7 +121,7 @@ def bcftools_call_and_filter(
     
     with st.spinner(f"bcftools call → {vcf_gz.name}"):
         ploidy_flag = "" if ploidy_mode == "diploid" else "--ploidy 1"
-        anno = "FORMAT/AD,FORMAT/DP,FORMAT/SP,INFO/MQ"  # <- namespaced tags
+        anno = "FORMAT/AD,FORMAT/DP,FORMAT/SP"
         cmd = [
         "bash", "-lc",
         (
