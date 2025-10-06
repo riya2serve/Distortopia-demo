@@ -24,6 +24,7 @@ raw_data/
 *.pileup
 *.tmp
 *.tmp.*
+*.tbi
 
 # Results from pipeline (don’t track unless summarized)
 *_gametes_longreads.fq.gz
