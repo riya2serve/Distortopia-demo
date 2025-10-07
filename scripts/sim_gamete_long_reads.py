@@ -75,10 +75,10 @@ def streamlit_panel(state):
     colA, colB = st.columns(2)
     with colA:
         hap1_path = st.text_input("Haplotype 1 FASTA", value=str(state.alt_refs / "A_thaliana_hap1.fa"))
-        out_name  = st.text_input("Output filename", value="thaliana_gametes_hifi.fq")
+        out_name  = st.text_input("Output filename", value="thaliana_gametes_hifi.fq", key="simreads_outname")
     with colB:
         hap2_path = st.text_input("Haplotype 2 FASTA", value=str(state.alt_refs / "A_thaliana_hap2.fa"))
-        species_cov = st.number_input("Target coverage (×)", 1.0, 300.0, float(state.target_cov), 1.0)
+        species_cov = st.number_input("Target coverage (×)", 1.0, 300.0, float(state.target_cov), 1.0, key="simreads_cov")
 
     read_len    = int(state.read_len)
     mean_xovers = float(state.mean_xovers)
@@ -89,16 +89,24 @@ def streamlit_panel(state):
         n_reads = max(1, (G*species_cov + read_len - 1)//read_len)
         st.caption(f"Genome ≈ {G:,} bp → {species_cov:.0f}× at {read_len:,} bp ≈ {n_reads:,} reads")
     except Exception:
-        n_reads = st.number_input("Number of reads", 1, 5_000_000, 10_000, 1_000)
+        n_reads = st.number_input("Number of reads", 1, 5_000_000, 10_000, 1_000, key="simreads_nreads")
 
-    seed = st.number_input("Seed", 0, 2**31-1, 42)
+    seed = st.number_input("Seed", 0, 2**31-1, 42, key="simreads_seed")
 
-    if st.button("Simulate reads"):
+    if st.button("Simulate reads", key="simreads_go"):
         try:
-            out = run(hap1_path, hap2_path, read_len, int(n_reads), mean_xovers, int(seed), str(Path(state.long_reads)/out_name))
+            out_path = Path(state.long_reads) / out_name
+            out = run(hap1_path, hap2_path, read_len, int(n_reads), mean_xovers, int(seed), str(out_path))
             st.success(f"Done → {out}")
-            with open(out, "rb") as fh:
-                st.download_button("Download FASTQ", fh, file_name=Path(out).name)
+
+            # Serve BYTES (no temp files / no stale handles)
+            data_bytes = Path(out).read_bytes()
+            st.download_button(
+                "Download FASTQ",
+                data=data_bytes,
+                file_name=Path(out).name,
+                mime="text/plain",
+                key="simreads_dl",
+            )
         except Exception as e:
             st.error(f"Simulation failed: {e}")
-
