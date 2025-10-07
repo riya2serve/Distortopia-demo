@@ -1,64 +1,37 @@
+# scripts/sim_haplotypes.py
+from pathlib import Path
 import streamlit as st
-import os
-import pathlib
-from haptools.mutate import mutate_fasta  # new subcommand I tried to create since original tool doesn't have it 
+from haptools.mutate import mutate_fasta
 
-def run_haptools(input_fasta, output_prefix, snp_rate=0.001, indel_rate=0.0, seeds=(42, 84)):
-    """Generate two haploid genomes from a reference FASTA using haptools mutate."""
+def run(input_fasta: str, output_prefix: str, snp_rate: float = 0.001,
+        indel_rate: float = 0.0, seeds=(42, 84)):
     out1 = f"{output_prefix}_hap1.fa"
     out2 = f"{output_prefix}_hap2.fa"
-
-    # Hap1
-    mutate_fasta(
-        input_fasta, out1,
-        snp_rate=float(snp_rate),
-        indel_rate=float(indel_rate),
-        seed=int(seeds[0])
-    )
-
-    # Hap2
-    mutate_fasta(
-        input_fasta, out2,
-        snp_rate=float(snp_rate),
-        indel_rate=float(indel_rate),
-        seed=int(seeds[1])
-    )
-
+    mutate_fasta(input_fasta, out1, snp_rate=float(snp_rate), indel_rate=float(indel_rate), seed=int(seeds[0]))
+    mutate_fasta(input_fasta, out2, snp_rate=float(snp_rate), indel_rate=float(indel_rate), seed=int(seeds[1]))
     return out1, out2
 
+def streamlit_panel(state):
+    st.header("1) Simulate haplotypes with Haptools")
+    outdir = Path(st.text_input("Output directory", value=str(state.alt_refs)))
+    snp_rate = st.number_input("SNP mutation rate", 0.0, 0.01, 0.001, 0.0001, format="%.4f")
+    indel_rate = st.number_input("Indel mutation rate", 0.0, 0.01, 0.0, 0.0001, format="%.4f")
+    seeds_str = st.text_input("Seeds (hap1,hap2)", value="42,84")
+    seeds = tuple(int(x.strip()) for x in seeds_str.split(","))
 
-# ---------------------- Streamlit UI ---------------------- #
-st.title("Distortopia: Simulate Haplotypes with Haptools")
+    colA, colB = st.columns(2)
+    with colA:
+        ref1_path = st.text_input("Reference 1 FASTA", value=str(state.raw_data / "A_thaliana.fna"))
+    with colB:
+        ref2_path = st.text_input("Reference 2 FASTA", value=str(state.raw_data / "A_lyrata.fna"))
 
-# Inputs
-ref1 = st.file_uploader("Upload Reference Genome 1 (FASTA)", type=["fa", "fasta", "fna"])
-ref2 = st.file_uploader("Upload Reference Genome 2 (FASTA)", type=["fa", "fasta", "fna"])
-
-snp_rate = st.number_input("SNP mutation rate", min_value=0.0, max_value=0.01,
-                           value=0.001, step=0.0001)
-indel_rate = st.number_input("Indel mutation rate", min_value=0.0, max_value=0.01,
-                             value=0.0, step=0.0001)
-outdir = st.text_input("Output directory", value="alt_refs")
-
-if st.button("Generate Haplotypes"):
-    os.makedirs(outdir, exist_ok=True)
-
-    for ref in [ref1, ref2]:
-        if ref is not None:
-            # Save uploaded file locally
-            prefix = pathlib.Path(ref.name).stem
-            ref_path = os.path.join(outdir, ref.name)
-            with open(ref_path, "wb") as f:
-                f.write(ref.getbuffer())
-
-            # Run haptools mutate twice (two haplotypes)
-            h1, h2 = run_haptools(ref_path, os.path.join(outdir, prefix),
-                                  snp_rate, indel_rate)
-
-            st.success(f"Generated haplotypes for {ref.name}: {h1}, {h2}")
-
-            # Download buttons
-            with open(h1, "rb") as f1, open(h2, "rb") as f2:
-                st.download_button("Download hap1", f1, file_name=os.path.basename(h1))
-                st.download_button("Download hap2", f2, file_name=os.path.basename(h2))
+    if st.button("Generate haplotypes"):
+        outdir.mkdir(parents=True, exist_ok=True)
+        for label, ref in [("Ref1", ref1_path), ("Ref2", ref2_path)]:
+            prefix = outdir / Path(ref).stem
+            try:
+                h1, h2 = run(ref, str(prefix), snp_rate, indel_rate, seeds)
+                st.success(f"{label}: {Path(h1).name}, {Path(h2).name}")
+            except Exception as e:
+                st.error(f"{label} failed — {e}")
 
