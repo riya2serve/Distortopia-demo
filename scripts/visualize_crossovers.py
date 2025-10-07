@@ -1,120 +1,188 @@
 #!/usr/bin/env python3
+# scripts/visualize_crossovers.py
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Dict
+
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import streamlit as st
+
+# Optional smoothing (fallback if SciPy not present)
+try:
+    from scipy.ndimage import gaussian_filter1d  # type: ignore
+    _HAVE_SCIPY = True
+except Exception:
+    _HAVE_SCIPY = False
 
 sns.set_context("talk")
+sns.set_style("whitegrid")
 
 
-# ---------- core plotting ----------
-def plot_crossovers(tsv_path: str, species_name: str, outdir: str) -> dict:
-    df = pd.read_csv(tsv_path, sep="\t")
+# -------------------- helpers --------------------
+def _species_to_safe(name: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in name).strip("_")
+
+
+def _smooth(y: np.ndarray, sigma_bins: float) -> np.ndarray:
+    if y.size == 0:
+        return y
+    if _HAVE_SCIPY and sigma_bins > 0:
+        return gaussian_filter1d(y.astype(float), sigma=sigma_bins)
+    # Fallback: 5-bin moving average
+    w = 5
+    if y.size < w:
+        return y.astype(float)
+    k = np.ones(w, dtype=float) / w
+    return np.convolve(y.astype(float), k, mode="same")
+
+
+def _one_breakpoint_positions(df: pd.DataFrame) -> np.ndarray:
+    """
+    Return one genomic position per read:
+      - If both left & right present -> midpoint
+      - Else whichever side is present
+      - Else NaN (dropped)
+    """
+    l = pd.to_numeric(df["crossover_left"], errors="coerce") if "crossover_left" in df else pd.Series(dtype=float)
+    r = pd.to_numeric(df["crossover_right"], errors="coerce") if "crossover_right" in df else pd.Series(dtype=float)
+
+    # Align indices if needed
+    if l.shape[0] != df.shape[0]: l = l.reindex(df.index)
+    if r.shape[0] != df.shape[0]: r = r.reindex(df.index)
+
+    pos = l.copy()
+    both = l.notna() & r.notna()
+    pos[both] = (l[both] + r[both]) / 2.0
+    only_r = l.isna() & r.notna()
+    pos[only_r] = r[only_r]
+
+    return pos.dropna().to_numpy()
+
+
+# -------------------- main plotting --------------------
+def recombination_map(
+    tsv_path: str | Path,
+    species_name: str,
+    outdir: str | Path = "plots",
+    *,
+    genome_bin_size: int = 1_000_000,  # 1 Mb
+    smooth_sigma_bins: float = 2.0,
+) -> Dict[str, str]:
+    """
+    Build a single smooth recombination map (crossovers per Mb) from a TSV.
+
+    Saves one PNG: <species>_recombination_map.png
+    Returns dict with summary and path.
+    """
+    tsv_path = str(tsv_path)
     outdir_p = Path(outdir)
     outdir_p.mkdir(parents=True, exist_ok=True)
+    species_safe = _species_to_safe(species_name)
 
-    # Clean numeric columns (turn "NA" into NaN)
-    df["crossover_left"] = pd.to_numeric(df["crossover_left"], errors="coerce")
-    df["crossover_right"] = pd.to_numeric(df["crossover_right"], errors="coerce")
+    df = pd.read_csv(tsv_path, sep="\t")
+    if not (("crossover_left" in df.columns) or ("crossover_right" in df.columns)):
+        raise ValueError("TSV must include 'crossover_left' and/or 'crossover_right' columns.")
 
-    # Helper name for filenames
-    species_safe = species_name.replace(" ", "_").replace(".", "")
+    # One position per read (midpoint if both sides available)
+    pos = _one_breakpoint_positions(df)
+    if pos.size == 0:
+        # Create a tiny blank plot to avoid crashing
+        fig = plt.figure(figsize=(10, 4))
+        plt.title(f"{species_name}: Recombination map (no crossovers)")
+        plt.xlabel("Genomic position (Mb)")
+        plt.ylabel("Crossovers per Mb")
+        plt.tight_layout()
+        out_png = outdir_p / f"{species_safe}_recombination_map.png"
+        fig.savefig(out_png, dpi=300)
+        plt.close(fig)
+        return {"summary": f"{species_name}: 0 crossovers found", "recomb_map_png": str(out_png)}
 
-    # 1) Crossovers per scaffold
-    # Count a crossover if either left or right is present on the read
-    has_any = df["crossover_left"].notna() | df["crossover_right"].notna()
-    counts = (
-        df.assign(has_any=has_any)
-          .groupby("scaff", as_index=False)["has_any"]
-          .sum(numeric_only=True)
-          .rename(columns={"has_any": "crossovers"})
-    )
+    # Axis range from observed positions
+    gmax = max(int(np.nanmax(pos)), genome_bin_size)
+    bins = np.arange(0, gmax + genome_bin_size, genome_bin_size)
+    counts, _ = np.histogram(pos, bins=bins)
 
-    fig1 = plt.figure(figsize=(9, 5))
-    sns.barplot(x="scaff", y="crossovers", data=counts, color="steelblue")
-    plt.title(f"{species_name}: Crossovers per scaffold")
-    plt.xlabel("Scaffold")
-    plt.ylabel("Crossover count")
-    plt.xticks(rotation=45, ha="right")
+    # Convert to rate per Mb
+    denom_mb = genome_bin_size / 1e6
+    rate = counts.astype(float) / denom_mb
+
+    # Smooth in bin space
+    rate_smooth = _smooth(rate, sigma_bins=smooth_sigma_bins)
+
+    # Bin centers as Mb
+    x = (bins[:-1] + genome_bin_size / 2.0) / 1e6
+
+    # Plot single smooth map
+    fig = plt.figure(figsize=(11, 4.8))
+    plt.plot(x, rate_smooth, lw=2.5, color="slateblue")
+    plt.fill_between(x, rate_smooth, color="slateblue", alpha=0.2)
+    plt.title(f"{species_name}: Recombination map (smoothed crossovers per Mb)")
+    plt.xlabel("Genomic position (Mb)")
+    plt.ylabel("Crossovers per Mb")
     plt.tight_layout()
-    out1 = outdir_p / f"{species_safe}_crossovers_per_scaffold.png"
-    fig1.savefig(out1, dpi=300)
-    plt.close(fig1)
 
-    # 2) Breakpoint density — overlay left vs right (Option B)
-    left_vals = df["crossover_left"].dropna()
-    right_vals = df["crossover_right"].dropna()
+    out_png = outdir_p / f"{species_safe}_recombination_map.png"
+    fig.savefig(out_png, dpi=300)
+    plt.close(fig)
 
-    fig2 = plt.figure(figsize=(10, 5))
-    sns.histplot(left_vals, bins=60, alpha=0.6, label="Left breakpoints", color="steelblue")
-    sns.histplot(right_vals, bins=60, alpha=0.6, label="Right breakpoints", color="tomato")
-    plt.title(f"{species_name}: Breakpoint distribution (left vs right)")
-    plt.xlabel("Genomic position (bp)")
-    plt.ylabel("Count")
-    plt.legend(title="Breakpoint side")
-    plt.tight_layout()
-    out2 = outdir_p / f"{species_safe}_breakpoint_density_overlay.png"
-    fig2.savefig(out2, dpi=300)
-    plt.close(fig2)
-
-    # 3) Small summary
-    n_reads = len(df)
-    n_with_co = int(has_any.sum())
-    summary = f"{species_name}: {n_with_co}/{n_reads} reads ({n_with_co/n_reads:.2%}) show ≥1 crossover"
-
-    return {
-        "summary": summary,
-        "per_scaffold_png": str(out1),
-        "density_png": str(out2),
-        "counts_df": counts,
-    }
+    summary = f"{species_name}: n={pos.size} crossover positions → map written"
+    return {"summary": summary, "recomb_map_png": str(out_png)}
 
 
-# ---------- programmatic entry ----------
-def run(tsv_path: Path, species_name: str, outdir: Path) -> dict:
-    return plot_crossovers(str(tsv_path), species_name, str(outdir))
+# -------------------- streamlit panel --------------------
+def streamlit_panel(state) -> None:
+    import streamlit as st
 
+    st.header("6) Recombination map (single smooth track)")
 
-# ---------- Streamlit panel ----------
-def streamlit_panel(state):
-    st.header("6) Visualize crossover TSVs")
+    c1, c2 = st.columns(2)
+    with c1:
+        th_tsv = Path(st.text_input(
+            "Thaliana TSV", value=str(state.data / "A_thaliana_gamete_crossovers.tsv"), key="rec_th_tsv"))
+        th_label = st.text_input("Thaliana label", value="A. thaliana", key="rec_th_label")
+    with c2:
+        ly_tsv = Path(st.text_input(
+            "Lyrata TSV", value=str(state.data / "A_lyrata_gamete_crossovers.tsv"), key="rec_ly_tsv"))
+        ly_label = st.text_input("Lyrata label", value="A. lyrata", key="rec_ly_label")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        th_tsv = Path(
-            st.text_input(
-                "Thaliana TSV",
-                value=str(state.data / "A_thaliana_gamete_crossovers.tsv"),
-                key="viz_th_tsv",
-            )
-        )
-        th_label = st.text_input("Thaliana label", value="A. thaliana", key="viz_th_label")
+    outdir = Path(st.text_input("Output plots folder", value=str(state.plots), key="rec_outdir"))
 
-    with col2:
-        ly_tsv = Path(
-            st.text_input(
-                "Lyrata TSV",
-                value=str(state.data / "A_lyrata_gamete_crossovers.tsv"),
-                key="viz_ly_tsv",
-            )
-        )
-        ly_label = st.text_input("Lyrata label", value="A. lyrata", key="viz_ly_label")
+    c3, c4 = st.columns(2)
+    with c3:
+        bin_size = int(st.number_input("Genome bin size (bp)", 50_000, 5_000_000, 1_000_000, 50_000, key="rec_bins"))
+    with c4:
+        sigma_bins = float(st.number_input("Smoothing (sigma in bins)", 0.0, 10.0, 2.0, 0.5, key="rec_sigma"))
 
-    outdir = Path(
-        st.text_input("Output plots folder", value=str(state.plots), key="viz_outdir")
-    )
-
-    if st.button("Generate plots", key="viz_go"):
+    if st.button("Make recombination maps", type="primary", key="rec_go"):
         try:
-            out_th = run(th_tsv, th_label, outdir)
-            out_ly = run(ly_tsv, ly_label, outdir)
+            out_th = recombination_map(th_tsv, th_label, outdir, genome_bin_size=bin_size, smooth_sigma_bins=sigma_bins)
+            out_ly = recombination_map(ly_tsv, ly_label, outdir, genome_bin_size=bin_size, smooth_sigma_bins=sigma_bins)
 
-            st.success(f"Saved plots to: {outdir.resolve()}")
-            for out in (out_th, out_ly):
+            st.success("Saved recombination maps to ./plots/")
+            for tag, out in (("Thaliana", out_th), ("Lyrata", out_ly)):
+                st.subheader(tag)
                 st.caption(out["summary"])
-                st.image(out["per_scaffold_png"], caption="Crossovers per scaffold")
-                st.image(out["density_png"], caption="Breakpoint density (left vs right)")
+                st.image(out["recomb_map_png"], use_container_width=True)
         except Exception as e:
-            st.error(str(e))
+            st.error(f"Visualization failed: {e}")
+
+
+# -------------------- CLI --------------------
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Create a single smooth recombination map from a crossover TSV.")
+    ap.add_argument("--tsv", required=True, help="Input TSV from find_crossovers.py")
+    ap.add_argument("--species", required=True, help="Species label")
+    ap.add_argument("--outdir", default="plots", help="Output folder for PNG")
+    ap.add_argument("--bin-size", type=int, default=1_000_000, help="Genome bin size (bp)")
+    ap.add_argument("--sigma", type=float, default=2.0, help="Smoothing sigma in bins")
+    args = ap.parse_args()
+
+    outs = recombination_map(args.tsv, args.species, args.outdir,
+                             genome_bin_size=args.bin_size, smooth_sigma_bins=args.sigma)
+    print("\n".join(f"{k}: {v}" for k, v in outs.items()))
 
