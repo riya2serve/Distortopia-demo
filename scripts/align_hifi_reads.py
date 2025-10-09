@@ -145,8 +145,10 @@ def run(
     for p in [ref1,ref2,reads1,reads2]:
         if not Path(p).exists():
             raise FileNotFoundError(p)
-
-    outdir = Path(outdir); outdir.mkdir(parents=True, exist_ok=True)
+    outdir = Path(outdir).expanduser().resolve()
+    if outdir.name == "":
+        outdir = Path.cwd() / "alignments"
+    outdir.mkdir(parents=True, exist_ok=True)
     ref_paths  = [Path(ref1), Path(ref2)]
     read_paths = [Path(reads1), Path(reads2)]
     jobs = [(r, ref, auto_out_bam(r, ref, outdir)) for r in read_paths for ref in ref_paths]
