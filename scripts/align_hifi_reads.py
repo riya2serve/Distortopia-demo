@@ -111,7 +111,7 @@ def bcftools_call_and_filter(
     with st.spinner(f"Filter high-quality variants → {filt_vcf.name}"):
         clauses = [f"QUAL>{qual_min}"]
         if require_pass:
-            clauses.append('FILTER="PASS"')
+            clauses.append('(FILTER="PASS" || FILTER=".")')
         # keep diploid hets only (comment out if you don’t want this)
         if ploidy_n == 2:
             clauses.append('GT="het"')
@@ -128,6 +128,7 @@ def bcftools_call_and_filter(
         ])
 
     n_filtered = vcf_count_records(filt_vcf)
+    st.write(f"Filtered variants kept: {n_filtered} of {n_all}")
     return vcf, (norm_vcf if normalize else None), filt_vcf, n_all, n_filtered
 
 def run(
