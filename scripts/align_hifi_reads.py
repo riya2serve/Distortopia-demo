@@ -60,21 +60,20 @@ def vcf_count_records(vcf_path: Path) -> int:
     except: return 0
 
 def bcftools_call_and_filter(ref_fa: Path, bam_p: Path, mapq_min: int, baseq_min: int,
-                             normalize: bool, ploidy_mode: str, qual_min: int, require_pass: bool
+                             normalize: bool, ploidy_mode: int, qual_min: int, require_pass: bool, keep_indels: bool = False,
 ) -> Tuple[Path, Optional[Path], Path, int, int]:
     if not check_tool("bcftools"):
         st.error("`bcftools` not found"); st.stop()
     ensure_fasta_index(ref_fa); ensure_bam_index(bam_p)
     vcf, norm_vcf, filt_vcf = auto_out_vcfs(bam_p)
 
-    # mpileup → call → uncompressed VCF (-Ov)
+    # mpileup → call → uncompressed VCF (-Ov), explicit ploidy and -m model
     with st.spinner(f"bcftools call → {vcf.name}"):
-        ploidy_flag = "" if ploidy_mode == "diploid" else "--ploidy 1"
         anno = "FORMAT/AD,FORMAT/DP,FORMAT/SP"
         run_cmd_text(["bash","-lc",
             "set -o pipefail; "
             f"bcftools mpileup -f {ref_fa} -q {mapq_min} -Q {baseq_min} -Ou -a {anno} {bam_p} "
-            f"| bcftools call {ploidy_flag} -mv -Ov -o {vcf}"])
+            f"| bcftools call -m --ploidy {ploidy_n} -v -Ov -o {vcf}"])
 
     n_all = vcf_count_records(vcf)
     src_vcf = vcf
@@ -85,14 +84,19 @@ def bcftools_call_and_filter(ref_fa: Path, bam_p: Path, mapq_min: int, baseq_min
         src_vcf = norm_vcf
 
     # strict filtered VCF (SNPs only, biallelic, QUAL, PASS?, het if diploid)
-    with st.spinner(f"Filter HQ biallelic het SNPs → {filt_vcf.name}"):
+    with st.spinner(f"Filter hi-quality biallelic het SNPs → {filt_vcf.name}"):
         clauses = [f"QUAL>{qual_min}"]
         if require_pass: clauses.append('FILTER="PASS"')
-        if ploidy_mode == "diploid": clauses.append('GT="het"')
+        if ploidy_n == 2: 
+            clauses.append('GT="het"')
         expr = " && ".join(clauses)
+
+        #choose which variant types to keep
+        variant_types = ["snps", "indels"] if keep_indels else ["snps"]
+        
         run_cmd_text([
             "bcftools","view",
-            "-v","snps",
+            "-v",",".join(variant_types),
             "-m2","-M2",
             "-i",expr,
             "-Ov","-o",str(filt_vcf), str(src_vcf)
@@ -129,15 +133,15 @@ def run(ref1: Path, ref2: Path, reads1: Path, reads2: Path, *,
         if call_variants:
             vcf, norm_vcf, filt_vcf, n_all, n_filt = bcftools_call_and_filter(
                 ref_fa=ref_p, bam_p=bam_p, mapq_min=int(mapq_min), baseq_min=int(baseq_min),
-                normalize=bool(normalize_vcf), ploidy_mode=ploidy_mode, qual_min=int(qual_min),
-                require_pass=bool(require_pass))
+                normalize=bool(normalize_vcf), ploidy_n=int(ploidy_mode), qual_min=int(qual_min),
+                require_pass=bool(require_pass), keep_indel=bool(keep_indels))
             row.update({"vcf_all": str(vcf), "vcf_norm": str(norm_vcf) if norm_vcf else "",
                         "vcf_filtered": str(filt_vcf), "variants_all": n_all, "variants_filtered": n_filt})
         rows.append(row)
     return pd.DataFrame(rows)
 
 def streamlit_panel(state):
-    st.header("3) Cross-map reads & call variants → data/ (uncompressed VCF)")
+    st.header("3) Cross-map long reads & call variants → data/ (uncompressed VCF)")
     col1,col2 = st.columns(2)
     with col1:
         ref1 = st.text_input("Reference FASTA #1", value=str(state.raw_data / "A_thaliana.fna"))
@@ -153,19 +157,27 @@ def streamlit_panel(state):
     st.subheader("bcftools settings")
     call_variants = st.checkbox("Call variants", True)
     c1,c2,c3 = st.columns(3)
-    with c1: ploidy_mode = st.selectbox("Ploidy", ["diploid","haploid"], 0)
-    with c2: normalize_vcf = st.checkbox("Normalize (bcftools norm)", True)
-    with c3: require_pass = st.checkbox('Require FILTER="PASS"', True)
+    with c1: 
+        ploidy_n = st.selectbox("Ploidy", [1,2], index = 1) #2 = diploid
+    with c2: 
+        normalize_vcf = st.checkbox("Normalize (bcftools norm)", True)
+    with c3: 
+        require_pass = st.checkbox('Require FILTER="PASS"', True)
     c4,c5,c6 = st.columns(3)
-    with c4: mapq_min = st.number_input("Read MAPQ ≥", 0, 60, 30)
-    with c5: baseq_min = st.number_input("Base QUAL ≥", 0, 60, 30)
-    with c6: qual_min = st.number_input("VCF QUAL >", 0, 500, 30)
+    with c4: 
+        mapq_min = st.number_input("Read MAPQ ≥", 0, 60, 30)
+    with c5: 
+        baseq_min = st.number_input("Base QUAL ≥", 0, 60, 30)
+    with c6: 
+        qual_min = st.number_input("VCF QUAL >", 0, 500, 30)
+
+    keep_indels = st.checkbox("Keep INDELS (not only SNPs)", value = False)
 
     if st.button("Run align+call", type="primary"):
         try:
             df = run(Path(ref1),Path(ref2),Path(reads1),Path(reads2),
                      threads=int(threads), outdir=outdir, index_bam=bool(index_bam),
-                     call_variants=bool(call_variants), ploidy_mode=ploidy_mode,
+                     call_variants=bool(call_variants), ploidy_mode=ploidy_n,
                      normalize_vcf=bool(normalize_vcf), require_pass=bool(require_pass),
                      mapq_min=int(mapq_min), baseq_min=int(baseq_min), qual_min=int(qual_min),
                      show_flagstat=bool(show_flagstat))
