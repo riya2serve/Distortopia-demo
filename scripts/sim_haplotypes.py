@@ -1,7 +1,7 @@
 # scripts/sim_haplotypes.py
 from pathlib import Path
 import streamlit as st
-from haptools.mutate import mutate_fasta
+from scripts.mutate import mutate_fasta
 
 def run(input_fasta: str, output_prefix: str, snp_rate: float = 0.001,
         indel_rate: float = 0.0, seeds=(42, 84)):
