@@ -63,9 +63,9 @@ def streamlit_panel(state):
     col1,col2 = st.columns(2)
     with col1:
         bam = Path(st.text_input("Haplotagged BAM", value=str(state.alignments / "thaliana_gametes_hifi__to__A_thaliana.haplotagged.bam")))
-        vcf = Path(st.text_input("Phased VCF",      value=str(state.data       / "A_thaliana_hap1_vs_hap2.phased.vcf")))
+        vcf = Path(st.text_input("Phased VCF",      value=str(state.data       / "Athal_gametes.phased.vcf")))
     with col2:
-        out_tsv = Path(st.text_input("Output TSV",  value=str(state.data / "A_thaliana_gamete_crossovers.tsv")))
+        out_tsv = Path(st.text_input("Output TSV",  value=str(state.data / "Athal_gamete_CO.tsv")))
         min_snps = st.number_input("Min phased SNPs/read", 1, 100, int(getattr(state,"min_snps",5)))
     if st.button("Run XO detection"):
         try:
