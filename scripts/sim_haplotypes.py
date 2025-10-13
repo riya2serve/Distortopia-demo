@@ -12,7 +12,7 @@ def run(input_fasta: str, output_prefix: str, snp_rate: float = 0.001,
     return out1, out2
 
 def streamlit_panel(state):
-    st.header("1) Simulate haplotypes with Haptools")
+    st.header("1) Simulate haplotypes")
     outdir = Path(st.text_input("Output directory", value=str(state.alt_refs)))
     snp_rate = st.number_input("SNP mutation rate", 0.0, 0.01, 0.001, 0.0001, format="%.4f")
     indel_rate = st.number_input("Indel mutation rate", 0.0, 0.01, 0.0, 0.0001, format="%.4f")
