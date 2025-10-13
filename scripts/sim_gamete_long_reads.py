@@ -22,10 +22,13 @@ def _contig_index(h1: Dict[str,str], h2: Dict[str,str]) -> List[Tuple[str,int]]:
     return out
 
 def _weighted_choice(contigs, rng):
-    tot = sum(L for _,L in contigs); r = rng.randrange(tot); acc=0
+    tot = sum(L for _,L in contigs);
+    r = rng.randrange(tot);
+    acc=0
     for name,L in contigs:
         acc += L
-        if r < acc: return name, L
+        if r < acc: 
+            return name, L
     return contigs[-1]
 
 def _poisson_knuth(lam: float, rng: random.Random) -> int:
@@ -42,20 +45,47 @@ def _breakpoints(read_len: int, mean_xovers: float, rng: random.Random) -> List[
     bps = sorted(set(rng.randrange(1, read_len) for _ in range(k)))
     return [b for b in bps if 0<b<read_len]
 
-def _mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int, mean_xovers: float, rng: random.Random) -> str:
-    bps = _breakpoints(read_len, mean_xovers, rng)
-    cuts = [0] + bps + [read_len]
-    use_h1_first = rng.choice([True, False])
-    out = []
-    for i in range(len(cuts)-1):
-        seg = cuts[i+1]-cuts[i]; s = start + cuts[i]
-        out.append((h1_seq if (use_h1_first ^ (i%2==1)) else h2_seq)[s:s+seg])
-    return "".join(out)
+# def old_mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int, mean_xovers: float, rng: random.Random) -> str:
+#     bps = _breakpoints(read_len, mean_xovers, rng)
+#     cuts = [0] + bps + [read_len]
+#     use_h1_first = rng.choice([True, False])
+#     out = []
+#     for i in range(len(cuts)-1):
+#         seg = cuts[i+1]-cuts[i]; s = start + cuts[i]
+#         out.append((h1_seq if (use_h1_first ^ (i%2==1)) else h2_seq)[s:s+seg])
+#     return "".join(out)
+
+def _mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int, crossover: float, rng: random.Random) -> str:
+    if rng.binomial(n=1, p=0.5):
+        a, b = h1_seq, h2_seq
+    else:
+        a, b = h2_seq, h1_seq
+    if crossover > 0:
+        chrom = h1_seq[:crossover] + h2_seq[crossover:]
+    else:
+        chrom = a
+    return chrom[start: start + read_len]
+
 
 def _genome_size_from_hap(fa: str) -> int:
     return sum(len(rec.seq) for rec in SeqIO.parse(fa, "fasta"))
 
-def run(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, mean_xovers: float, seed: int, out_path: str):
+# #def oldrun(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, mean_xovers: float, seed: int, out_path: str):
+#     #rng = random.Random(seed)
+#    # h1 = _read_fasta_dict(h1_fa); h2 = _read_fasta_dict(h2_fa)
+#     #contigs = [(c,L) for c,L in _contig_index(h1,h2) if L>=read_len]
+#     if not contigs: raise RuntimeError(f"No contigs >= {read_len} in both haplotypes.")
+#     out_p = Path(out_path); out_p.parent.mkdir(parents=True, exist_ok=True)
+#     qline = "I"*read_len
+#     with open(out_p, "w") as fh:
+#         for i in range(1, n_reads+1):
+#             cname, L = _weighted_choice(contigs, rng)
+#             start = rng.randrange(0, L - read_len + 1)
+#             seq = _mosaic_read(h1[cname], h2[cname], start, read_len, mean_xovers, rng)
+#             fh.write(f"@simRead_{i}_{cname}:{start}-{start+read_len}\n{seq}\n+\n{qline}\n")
+#     return str(out_p)
+
+def run(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, recomb_rate: float, seed: int, out_path: str):
     rng = random.Random(seed)
     h1 = _read_fasta_dict(h1_fa); h2 = _read_fasta_dict(h2_fa)
     contigs = [(c,L) for c,L in _contig_index(h1,h2) if L>=read_len]
@@ -64,9 +94,12 @@ def run(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, mean_xovers: float,
     qline = "I"*read_len
     with open(out_p, "w") as fh:
         for i in range(1, n_reads+1):
-            cname, L = _weighted_choice(contigs, rng)
+            cname, L = rng.choice(contigs)
+            crossover = -1
+            if rng.binomial(n=L, p=recomb_rate):
+                crossover = rng.randint(0, L)
             start = rng.randrange(0, L - read_len + 1)
-            seq = _mosaic_read(h1[cname], h2[cname], start, read_len, mean_xovers, rng)
+            seq = _mosaic_read(h1[cname], h2[cname], start, read_len, crossover, rng)
             fh.write(f"@simRead_{i}_{cname}:{start}-{start+read_len}\n{seq}\n+\n{qline}\n")
     return str(out_p)
 
@@ -81,7 +114,7 @@ def streamlit_panel(state):
         species_cov = st.number_input("Target coverage (×)", 1.0, 300.0, float(state.target_cov), 1.0, key="simreads_cov")
 
     read_len    = int(state.read_len)
-    mean_xovers = float(state.mean_xovers)
+    recomb_rate = float(state.recomb_rate)
 
     # auto n_reads
     try:
@@ -96,7 +129,7 @@ def streamlit_panel(state):
     if st.button("Simulate reads", key="simreads_go"):
         try:
             out_path = Path(state.long_reads) / out_name
-            out = run(hap1_path, hap2_path, read_len, int(n_reads), mean_xovers, int(seed), str(out_path))
+            out = run(hap1_path, hap2_path, read_len, int(n_reads), recomb_rate, int(seed), str(out_path))
             st.success(f"Done → {out}")
 
             # Serve BYTES (no temp files / no stale handles)
