@@ -1,6 +1,7 @@
 # scripts/sim_gamete_long_reads.py
 from pathlib import Path
 import random
+import math
 from typing import Dict, List, Tuple
 import streamlit as st
 from Bio import SeqIO
@@ -31,19 +32,19 @@ def _weighted_choice(contigs, rng):
             return name, L
     return contigs[-1]
 
-def _poisson_knuth(lam: float, rng: random.Random) -> int:
-    if lam<=0: return 0
-    L = (2.718281828459045)**(-lam); k,p = 0,1.0
-    while True:
-        p *= rng.random()
-        if p <= L: return k
-        k += 1
+# def _poisson_knuth(lam: float, rng: random.Random) -> int:
+#     if lam<=0: return 0
+#     L = (2.718281828459045)**(-lam); k,p = 0,1.0
+#     while True:
+#         p *= rng.random()
+#         if p <= L: return k
+#         k += 1
 
-def _breakpoints(read_len: int, mean_xovers: float, rng: random.Random) -> List[int]:
-    k = _poisson_knuth(mean_xovers, rng)
-    if k==0: return []
-    bps = sorted(set(rng.randrange(1, read_len) for _ in range(k)))
-    return [b for b in bps if 0<b<read_len]
+# def _breakpoints(read_len: int, mean_xovers: float, rng: random.Random) -> List[int]:
+#     k = _poisson_knuth(mean_xovers, rng)
+#     if k==0: return []
+#     bps = sorted(set(rng.randrange(1, read_len) for _ in range(k)))
+#     return [b for b in bps if 0<b<read_len]
 
 # def old_mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int, mean_xovers: float, rng: random.Random) -> str:
 #     bps = _breakpoints(read_len, mean_xovers, rng)
@@ -55,8 +56,25 @@ def _breakpoints(read_len: int, mean_xovers: float, rng: random.Random) -> List[
 #         out.append((h1_seq if (use_h1_first ^ (i%2==1)) else h2_seq)[s:s+seg])
 #     return "".join(out)
 
+
+def sample_sine_density(length: int, mean: float, rng: random.Random):
+    amplitude = mean / 2.
+    mm = mean + amplitude
+    while True:
+        k = int(rng.randrange(0, length))
+        x = (k + 0.5) / length
+        # 2 * pi * (2 cycles) * x
+        p = mean + amplitude * math.sin(math.pi * 2 * 2 * x)
+        if rng.random() < (p / mm):
+            return k
+
+
+def binomial(n: int, p: float) -> int:
+    return sum(random.random() < p for _ in range(n))
+
+
 def _mosaic_read(h1_seq: str, h2_seq: str, start: int, read_len: int, crossover: float, rng: random.Random) -> str:
-    if rng.binomial(n=1, p=0.5):
+    if binomial(n=1, p=0.5):
         a, b = h1_seq, h2_seq
     else:
         a, b = h2_seq, h1_seq
@@ -85,7 +103,7 @@ def _genome_size_from_hap(fa: str) -> int:
 #             fh.write(f"@simRead_{i}_{cname}:{start}-{start+read_len}\n{seq}\n+\n{qline}\n")
 #     return str(out_p)
 
-def run(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, recomb_rate: float, seed: int, out_path: str):
+def run(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, recomb_rate: float, uniform: bool, seed: int, out_path: str):
     rng = random.Random(seed)
     h1 = _read_fasta_dict(h1_fa); h2 = _read_fasta_dict(h2_fa)
     contigs = [(c,L) for c,L in _contig_index(h1,h2) if L>=read_len]
@@ -96,8 +114,17 @@ def run(h1_fa: str, h2_fa: str, read_len: int, n_reads: int, recomb_rate: float,
         for i in range(1, n_reads+1):
             cname, L = rng.choice(contigs)
             crossover = -1
-            if rng.binomial(n=L, p=recomb_rate):
-                crossover = rng.randint(0, L)
+            
+            # is there a crossover or not? if so, get the position else store as -1
+            if binomial(n=L, p=recomb_rate):
+
+                # uniform recomb rate sampling
+                if uniform:
+                    crossover = rng.randrange(0, L)
+                # sinusoidal recomb rate sampling
+                else:
+                    crossover = sample_sine_density(L, recomb_rate, rng)
+
             start = rng.randrange(0, L - read_len + 1)
             seq = _mosaic_read(h1[cname], h2[cname], start, read_len, crossover, rng)
             fh.write(f"@simRead_{i}_{cname}:{start}-{start+read_len}\n{seq}\n+\n{qline}\n")

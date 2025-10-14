@@ -33,7 +33,7 @@ with st.sidebar:
     state.threads     = st.number_input("Threads", 1, 64, value=8)
     state.read_len    = st.number_input("Read length (bp)", 1_000, 2_000_000, value=100_000, step=1_000)
     state.target_cov  = st.number_input("Target coverage (×)", 1.0, 200.0, value=50.0, step=1.0)
-    state.recomb_rate = st.number_input("Recombination rate", 0.0, 0.00000005, value=0.000000001, step=0.000000001)
+    state.recomb_rate = st.number_input("Recombination rate", 0.0, 0.00000005, value=0.000000001, step=0.000000001, format="%2e")
     state.min_snps    = st.number_input("Min phased SNPs/read", 1, 100, value=5, step=1)
 
 tabs = st.tabs([
