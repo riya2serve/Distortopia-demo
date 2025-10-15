@@ -1,0 +1,17 @@
+name: disto
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python>=3.9,<3.13
+  - loguru
+  - numpy
+  - pandas
+  - bcftools
+  - samtools
+  - minimap2
+  - htslib
+  - whatshap  # note: requires Python <=3.12
+  - toyplot
+  # - freebayes
