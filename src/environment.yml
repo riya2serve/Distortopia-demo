@@ -1,17 +1,16 @@
-name: disto
+name: distortopia
 channels:
   - conda-forge
   - bioconda
   - defaults
 dependencies:
-  - python>=3.9,<3.13
-  - loguru
-  - numpy
+  - python=3.10
+  - biopython
   - pandas
+  - numpy
+  - matplotlib
+  - streamlit 
   - bcftools
   - samtools
   - minimap2
   - htslib
-  - whatshap  # note: requires Python <=3.12
-  - toyplot
-  # - freebayes
