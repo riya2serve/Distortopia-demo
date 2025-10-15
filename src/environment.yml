@@ -13,5 +13,5 @@ dependencies:
   - minimap2
   - htslib
   - whatshap  # note: requires Python <=3.12
-  - matplotlib  
+  - toyplot
   # - freebayes
