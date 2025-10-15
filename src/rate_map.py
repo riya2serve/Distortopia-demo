@@ -35,7 +35,7 @@ def make_sine_rate_map(length: int, bins: int, mean_rate: float) -> RateMap:
 
     cycles = 4.0
     phase = 0.0
-    tau = getattr(math, "tau", 2.0 * math.pi)
+    tau = 2.0 * math.pi
     dx = length / bins
 
     rates: List[float] = []

@@ -7,9 +7,11 @@ import argparse
 from .cli_simulate import _setup_simulate_subparser
 from .cli_mapcall import _setup_mapcall_subparser
 from .cli_infer import _setup_infer_subparser
+from .cli_plot import _setup_plot_subparser
 from .simulate import run_simulate
 from .mapcall import run_mapcall
 from .infer import run_infer
+from .plot import run_plot
 # from ..utils.exceptions import DistoError
 # from setup_logger import set_log_level
 from loguru import logger
@@ -49,6 +51,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     _setup_simulate_subparser(subparser, f"{HEADER}\ndisto simulate: demultiplex pooled reads to sample files by index/barcode")
     _setup_mapcall_subparser(subparser, f"{HEADER}\ndisto mapcall: map reads, call variants, find recombinants")
     _setup_infer_subparser(subparser, f"{HEADER}\ndisto infer: infer crossover map from recombinants")
+    _setup_plot_subparser(subparser, f"{HEADER}\ndisto plot: plot crossover distributions")    
     return parser
 
 
@@ -134,6 +137,20 @@ def run_subcommand(args):
             outdir=args.out,
             prefix=args.prefix,
             min_snps=args.min_snps,
+            # log_level=args.log_level,
+        )
+        sys.exit(0)     
+
+
+    if args.subcommand == "plot":
+        logger.info("----------------------------------------------------------------")
+        logger.info("----- disto plot: plot crossover distribution -----------------")
+        logger.info("----------------------------------------------------------------")
+        run_plot(
+            tsv=args.tsv,
+            outdir=args.out,
+            prefix=args.prefix,
+            # min_snps=args.min_snps,
             # log_level=args.log_level,
         )
         sys.exit(0)     

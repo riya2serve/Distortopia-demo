@@ -31,6 +31,7 @@ raw_data/
 *_gametes.bam
 *_gametes.vcf
 *_crossovers.tsv
+*__pycache__/
 
 # Large archives
 *.zip

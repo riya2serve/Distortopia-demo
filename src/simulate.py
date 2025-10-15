@@ -177,7 +177,7 @@ def run_simulate(
     samplers = {}
     for cname, seq in h1.items():
         # make a sine rate map
-        rmap = make_sine_rate_map(len(seq), bins=500, mean_rate=crossover_rate)
+        rmap = make_sine_rate_map(len(seq), bins=200, mean_rate=crossover_rate)
         # accepts any rate map
         samplers[cname] = RateMapInterferenceSampler(rmap)
 

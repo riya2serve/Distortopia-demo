@@ -1,45 +1,44 @@
 
-# Vision
 
+
+## Installation
+
+Set up and activate a new conda environment
 ```bash
-tool -b BAM -r REF -o OUT
+conda create -f src/environment.yml -n disto
+conda activate disto
 ```
 
-## Dependencies
-- minimap2
-- bcftools
-- whatshap
-- matplotlib
-- pandas
-- numpy
+Install the local `disto` package into the conda env
+```bash
+cd Distortopia-demo/
+pip install -e . --no-deps
+```
 
-## Steps
-1. Call variant positions in BAM file using bcftools => .vcf
-2. Filter VCF to keep only high quality hetero sites using bcftools => .filtered.vcf
-3. Phase variants in whatshap => .phased.filtered.vcf
-4. Write TSV of read phases => .tsv
-5. Analyse TSV and plot histogram..
+Call the `disto` program top-level CLI
+```bash
+disto -h
+```
 
-## Step 2
-- Exclude INDELS
-- Exclude MNPs (variants should be bi-allelic)
-- Exclude Low Quality variants (Q>30)
-- Require variant call to be heterozygous.
+## Running an example
 
-## Step 3
-- Write Python function(VCF, BAM)
-- Iterate over reads in bam and get the following information:
-  - [Scaff, start, end, nsnps, phased-snps (e.g., 00000), crossover-left, crossover-right]
-  - e.g., [Chr1, 5000, 55000, 10, 0000000000, NA, NA]
-  - e.g., [Chr1, 8000, 62000, 8, 00001111, 25000, 35000]
-- SUBSTEPS:
-  - Parse read chrom, start, end from BAM
-  - Get number of variants in this region from VCF (e.g., 10)
-  - Get positions of each variant (e.g., [10, 20, 200, 3000, 6000, 7000, 10000, 20000, ...]
-  - Get phase vector of these positions (e.g., [0000001111]
-  - If one cross-over occurred store position on either side of it: (7000, 10000)
-  - If no cross-over then store (NA, NA)
-  - If >1 cross-over then exclude read as bad variant calls.
-  - Write results to TSV
- 
-  
+Simulate 10M gamete reads for chr 1 of a REF genome.
+```bash
+disto simulate -r REF.fa -c 1 -n 10_000_000 -s 123 -p test
+```
+
+Map reads, call and phase variants.
+```bash
+disto mapcall -r REF.fa -g test.gametes.fastq.gz
+```
+
+Infer crossovers
+```bash
+disto infer -r REF.fa -b test.sorted.bam -v test.phased.vcf.gz
+```
+
+Plot crossovers
+```bash
+disto plot -t test.tsv
+```
+
