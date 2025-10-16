@@ -68,7 +68,7 @@ def run_plot(
         
         # --- added lines to recolor plots ---
         m0._fill.color = "#d1cef6"     # bars (fill color)
-        m1.stroke.color = "#7b6de2"   # line (stroke color)
+        m1._stroke.color = "#7b6de2"   # line (stroke color)
         # ---------------
 
         # axes.hlines([mean_rate])
