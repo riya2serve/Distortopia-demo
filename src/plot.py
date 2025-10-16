@@ -65,6 +65,12 @@ def run_plot(
         m0 = axes.bars((mags, bins), opacity=0.6)
         mids = (bins[:-1] + (bins[1] - bins[0]) / 2.)
         m1 = axes.plot(mids, mags, opacity=0.8)
+        
+        # --- added lines to recolor plots ---
+        m0.color = "#d1cef6"  # lavender purple (sampled from your slide)
+        m1.color = "#d1cef6"
+        # ---------------
+
         # axes.hlines([mean_rate])
         toyplot.pdf.render(canvas, str(out))
         logger.info(f"wrote {out}")
