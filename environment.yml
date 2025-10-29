@@ -9,8 +9,9 @@ dependencies:
   - pandas
   - numpy
   - matplotlib
-  - streamlit 
+  - streamlit
   - bcftools
   - samtools
   - minimap2
   - htslib
+  - whatshap  # note: requires Python <=3.12

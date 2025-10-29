@@ -148,13 +148,14 @@ def run_mapcall(
     """...
     """
     outdir = outdir.expanduser().absolute()
+    outdir.mkdir(exist_ok=True)
     reference = reference.expanduser().absolute()
     if prefix:
         base = outdir / f"{prefix}"
     else:
         base = outdir / gametes.stem
-    # bam_file = map_reads_to_bam(reference, gametes, base, threads)
-    # vcf_gz = call_variants_bcftools(reference, bam_file, base, min_map_q, min_base_q)
+    bam_file = map_reads_to_bam(reference, gametes, base, threads)
+    vcf_gz = call_variants_bcftools(reference, bam_file, base, min_map_q, min_base_q)
     bam_file = base.with_suffix(".sorted.bam")
     vcf_gz = base.with_suffix(".vcf.gz")
     logger.info(bam_file)

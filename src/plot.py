@@ -16,6 +16,7 @@ def run_plot(
     outdir: Path,
     prefix: str,
 ):
+    outdir.mkdir(exist_ok=True)
     out = outdir / f"{prefix}.pdf"
     # mean_rate = 1e-8
     bins = 100

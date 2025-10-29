@@ -1,4 +1,14 @@
 
+## TODO
+### Tests to validate our tool:
+- test1: run simulate with larger dataset (50M reads x 100Kb per chrom)  (best)
+- test2: run simulate with larger dataset (1M reads x 100Kb per chrom)
+- test3: run simulate with larger dataset (50M reads x 15Kb per chrom)
+- test4: run simulate with larger dataset (1M reads x 15Kb per chrom)    (worst)
+- test5: run simulate with true recomb map of Chr? of At. Show that we can hit the true result.
+### Tests on empirical Amaranthus data:
+- test6: run on At pollen pool data. Plot histogram that also shows centromeres, telomeres, and SDR.
+- test7: run on Ap pollen pool data. Plot histogram that also shows centromeres, telomeres, and SDR.
 
 
 ## Installation
