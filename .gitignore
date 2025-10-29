@@ -1,5 +1,6 @@
 # Raw genome & large data files
 raw_data/
+*.pyc
 *.fa
 *.fna
 *.fasta
@@ -32,6 +33,8 @@ raw_data/
 *_gametes.vcf
 *_crossovers.tsv
 *__pycache__/
+disto.egg-info/
+.DS_Store
 
 # Large archives
 *.zip
