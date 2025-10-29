@@ -148,7 +148,6 @@ def run_mapcall(
     """Map reads, call variants, then phase. """
     outdir = outdir.expanduser().absolute()
     outdir.mkdir(parents=True, exist_ok=True)
-
     reference = reference.expanduser().absolute()
     gametes = gametes.expanduser().absolute()
 
@@ -156,6 +155,7 @@ def run_mapcall(
         base = outdir / f"{prefix}"
     else:
         base = outdir / gametes.stem
+
     #1. Map reads --> BAM
     bam_file = map_reads_to_bam(reference, gametes, base, threads)
 
