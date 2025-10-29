@@ -255,6 +255,7 @@ def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,st
 
 def run_infer(bam_path: Path, vcf_gz: Path, reference: Path, outdir: Path, prefix: str, min_snps: int):
     """..."""
+    outdir.mkdir(exist_ok=True)
     logger.info("inferring crossover positions")
     phased_dict = load_phased_biallelic_snps(vcf_gz)
     data = read_crossovers(bam_path, phased_dict, min_snps)
