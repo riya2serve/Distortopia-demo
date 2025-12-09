@@ -145,20 +145,28 @@ def run_mapcall(
     min_map_q: int,
     min_base_q: int,
 ):
-    """...
-    """
+    """Map reads, call variants, then phase. """
     outdir = outdir.expanduser().absolute()
+    outdir.mkdir(parents=True, exist_ok=True)
+
     reference = reference.expanduser().absolute()
+    gametes = gametes.expanduser().absolute()
+
     if prefix:
         base = outdir / f"{prefix}"
     else:
         base = outdir / gametes.stem
-    # bam_file = map_reads_to_bam(reference, gametes, base, threads)
-    # vcf_gz = call_variants_bcftools(reference, bam_file, base, min_map_q, min_base_q)
+    #1. Map reads --> BAM
+    bam_file = map_reads_to_bam(reference, gametes, base, threads)
+
+    #2. Call variants --> VCF.gz
+    vcf_gz = call_variants_bcftools(reference, bam_file, base, min_map_q, min_base_q)
     bam_file = base.with_suffix(".sorted.bam")
     vcf_gz = base.with_suffix(".vcf.gz")
     logger.info(bam_file)
     logger.info(vcf_gz)
+
+    #3. Phase VCF with WhatsHap
     phased_vcf_gz = phase_vcf(reference, bam_file, vcf_gz, base)
     return phased_vcf_gz
 

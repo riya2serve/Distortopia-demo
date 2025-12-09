@@ -3,9 +3,8 @@
 """Generate TSV with inferred crossover window for each recombinant read
 
 TODO: 
-    - parallelize
-    - mask/exclude near chrom ends
-    - ...
+    - parallelize                      # done via samtools -@ <threads>
+    - mask/exclude near chrom ends     # done via edge_mask_bp and reference .fai
 """
 
 from __future__ import annotations
@@ -116,7 +115,34 @@ def _ref_end_from_cigar(pos1: int, cigar_ops: List[Tuple[str, int]]) -> int:
     return pos1 + ref_len - 1
 
 
-def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,str]]], min_snps: int) -> pd.DataFrame:
+def _get_chrom_lengths(reference: Path) -> Dict[str, int]:
+    """Get chromosome lengths from reference.fai, creating it with samtools faidx if needed."""
+    fai = Path(str(reference) + ".fai")
+    if not fai.exists():
+        logger.info(f"Indexing reference with samtools faidx: {reference}")
+        rc = sp.call(["samtools", "faidx", str(reference)])
+        if rc != 0:
+            raise RuntimeError("samtools faidx failed")
+
+    lengths: Dict[str, int] = {}
+    with fai.open() as fh:
+        for line in fh:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 2:
+                continue
+            chrom, length_s = fields[0], fields[1]
+            lengths[chrom] = int(length_s)
+    return lengths
+
+
+def read_crossovers(
+    bam_path: Path,
+    phased_dict: Dict[str, List[Tuple[int,str,str]]],
+    min_snps: int,
+    chrom_lengths: Dict[str, int] | None = None,
+    edge_mask_bp: int = 0,
+    threads: int = 1,
+) -> pd.DataFrame:
     """Read BAM without pysam; uses `samtools view -h -F 0x904` and parses CIGAR.
 
     Parameters
@@ -127,11 +153,20 @@ def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,st
         {chrom: [(pos1, allele0, allele1), ...]} with pos1 1-based.
     min_snps : int
         Minimum phased SNPs observed on a read.
+    chrom_lengths : dict, optional
+        {chrom: length} from reference .fai (for edge masking).
+    edge_mask_bp : int, optional
+        Mask crossovers within this many bp of chrom ends. 0 = no masking.
+    threads : int, optional
+        Number of threads to give to samtools view (-@). Default 1.
     """
     # Stream SAM records; -h keeps headers so we can skip them; -F 0x904 filters unmapped (0x4),
-    # secondary (0x100), supplementary (0x800) early for speed, though these should
-    # already be gone.
-    cmd = ["samtools", "view", "-h", "-F", "0x904", str(bam_path)]
+    # secondary (0x100), supplementary (0x800) early for speed.
+    cmd = ["samtools", "view", "-h", "-F", "0x904"]
+    if threads and threads > 1:
+        cmd.extend(["-@", str(threads)])
+    cmd.append(str(bam_path))
+
     proc = sp.Popen(cmd, stdout=sp.PIPE, text=True, bufsize=1)
 
     rows = []
@@ -166,13 +201,10 @@ def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,st
             rpos = pos1                   # 1-based reference cursor
             qpos = 0                      # 0-based read cursor (in SEQ as stored in SAM)
 
-            # iterate over not matched positions (snps)
             for op, length in cigar_ops:
                 if op in ("M", "=", "X"):
                     # These consume both ref and query; record per-base mapping
-                    # Map each aligned column to read base
-                    for i in range(length):
-                        # Only "matches_only": include all M/= /X columns
+                    for _ in range(length):
                         ref2base[rpos] = seq[qpos]
                         rpos += 1
                         qpos += 1
@@ -180,7 +212,7 @@ def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,st
                     qpos += length
                 elif op in ("D", "N"):   # deletion or ref skip (consume ref only)
                     rpos += length
-                elif op in ("S",):       # soft clip (consume query only)
+                elif op == "S":          # soft clip (consume query only)
                     qpos += length
                 elif op in ("H", "P"):   # hard clip / pad (consume neither)
                     pass
@@ -219,6 +251,21 @@ def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,st
                 # >1 transition: skip (consistent with your original)
                 continue
 
+            # Optional: mask crossovers near chromosome ends
+            if (
+                xl != "NA"
+                and xr != "NA"
+                and chrom_lengths is not None
+                and edge_mask_bp > 0
+            ):
+                chrom_len = chrom_lengths.get(rname)
+                if chrom_len is not None:
+                    left_min = edge_mask_bp
+                    right_max = chrom_len - edge_mask_bp
+                    # If crossover window is outside safe interior region, skip
+                    if not (left_min <= xl <= right_max and left_min <= xr <= right_max):
+                        continue
+
             rows.append(
                 {
                     "scaff": rname,
@@ -253,11 +300,61 @@ def read_crossovers(bam_path: Path, phased_dict: Dict[str, List[Tuple[int,str,st
     )
 
 
-def run_infer(bam_path: Path, vcf_gz: Path, reference: Path, outdir: Path, prefix: str, min_snps: int):
-    """..."""
+def run_infer(
+    bam_path: Path,
+    vcf_gz: Path,
+    reference: Path,
+    outdir: Path,
+    prefix: str,
+    min_snps: int,
+    threads: int = 1,
+    edge_mask_bp: int = 0,
+):
+    """Infer crossover windows and write TSV.
+
+    Parameters
+    ----------
+    bam_path : Path
+        Input BAM with long-read alignments.
+    vcf_gz : Path
+        Phased, biallelic SNP VCF (bgzipped).
+    reference : Path
+        Reference FASTA used for alignment (for chrom lengths).
+    outdir : Path
+        Output directory (created if needed).
+    prefix : str
+        Output prefix, e.g. 'Chr3' or 'test1'.
+    min_snps : int
+        Minimum informative phased SNPs per read.
+    threads : int, optional
+        Number of threads to pass to samtools view (-@). Default 1.
+    edge_mask_bp : int, optional
+        Number of bp to mask at each chromosome end when considering crossovers.
+        If 0, no masking is applied.
+    """
     logger.info("inferring crossover positions")
+
+    outdir = outdir.expanduser().absolute()
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    bam_path = bam_path.expanduser().absolute()
+    vcf_gz = vcf_gz.expanduser().absolute()
+    reference = reference.expanduser().absolute()
+
     phased_dict = load_phased_biallelic_snps(vcf_gz)
-    data = read_crossovers(bam_path, phased_dict, min_snps)
+    chrom_lengths = _get_chrom_lengths(reference)
+
+    data = read_crossovers(
+        bam_path=bam_path,
+        phased_dict=phased_dict,
+        min_snps=min_snps,
+        chrom_lengths=chrom_lengths,
+        edge_mask_bp=edge_mask_bp,
+        threads=threads,
+    )
+
     outpath = outdir / f"{prefix}.tsv"
     data.to_csv(outpath, sep="\t", index=False)
     print(data)
+    logger.info(f"Wrote crossover table: {outpath}")
+

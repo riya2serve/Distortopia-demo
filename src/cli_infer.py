@@ -37,6 +37,16 @@ def _setup_infer_subparser(subparsers: argparse._SubParsersAction, header: str =
         "-m", "--min-snps", metavar="int", type=int, default=5,
         help="Minimum num bi-allelic SNPs per read. [default=5]",
     )
+    # NEW: threads for samtools view
+    parser.add_argument(
+        "-t", "--threads", metavar="int", type=int, default=1,
+        help="Number of threads for samtools view (-@). [default=1]",
+    )
+    # NEW: edge masking in bp
+    parser.add_argument(
+        "-e", "--edge-mask-bp", metavar="int", type=int, default=0,
+        help="Mask crossovers within this many bp of chrom ends. [default=0 = no masking]",
+    )
     parser.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
         help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
@@ -46,3 +56,4 @@ def _setup_infer_subparser(subparsers: argparse._SubParsersAction, header: str =
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )
     return parser
+

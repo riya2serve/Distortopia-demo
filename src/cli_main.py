@@ -138,6 +138,8 @@ def run_subcommand(args):
             prefix=args.prefix,
             min_snps=args.min_snps,
             # log_level=args.log_level,
+            threads=args.threads,
+            edge_mask_bp=args.edge_mask_bp,
         )
         sys.exit(0)     
 
