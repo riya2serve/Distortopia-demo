@@ -2,9 +2,10 @@
 
 """Map long reads to a reference haplotype and call variants.
 
-TODO:
+TODO
+----
     - add back in more filtering options on the variant calls.
-    - 
+    - ...
 
 # Consider alternative implementation. But can it work for phasing?
 freebayes \
@@ -30,10 +31,7 @@ BIN_MIN = str(BIN / "minimap2")
 
 
 def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -> Path:
-    """Map HiFi reads, sort/index BAM, call variants with bcftools, and index VCF.
-
-    Returns:
-        Path to the bgzipped VCF.
+    """Map HiFi reads and return sorted indexed BAM.
     """
     logger.info("aligning reads to reference")
     threads = max(1, threads // 2)
@@ -77,7 +75,7 @@ def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -
 
 def call_variants_bcftools(reference: Path, bam_file: Path, base: Path, min_map_q: int, min_base_q: int):
     """Return VCF file with variants called by bcftools."""
-    logger.info("calling variants")    
+    logger.info("calling variants")
     vcf_gz = base.with_suffix(".vcf.gz")
 
     # --- call variants ---
@@ -119,7 +117,7 @@ def call_variants_bcftools(reference: Path, bam_file: Path, base: Path, min_map_
 
 def phase_vcf(reference: Path, bam_path: Path, vcf_gz: Path, base: Path):
     """Phase VCF file in whatshap"""
-    logger.info("phasing VCF")    
+    logger.info("phasing VCF")
     phased_vcf_gz = base.with_suffix(".phased.vcf.gz")
     cmd1 = [
         BIN_WHA, "phase",
