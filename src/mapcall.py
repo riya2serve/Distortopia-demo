@@ -30,6 +30,43 @@ BIN_WHA = str(BIN / "whatshap")
 BIN_MIN = str(BIN / "minimap2")
 
 
+# def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -> Path:
+#     threads = max(1, threads // 2)
+#     bam_file = base.with_suffix(".sorted.bam")
+#     # Ensure reference index exists for mpileup.
+#     fai = reference.with_suffix(reference.suffix + ".fai")
+#     if not fai.exists():
+#         sp.run(["samtools", "faidx", str(reference)], check=True)
+#     # --- map & sort ---
+#     cmd_map = [
+#         BIN_MIN, "-ax", "map-hifi",
+#         "-R", f"@RG\\tID:{base}\\tSM:{base}",  # store sample name.
+#         "-t", str(threads),
+#         str(reference),
+#         str(gametes),
+#     ]
+#     cmd_sort = [
+#         BIN_SAM, "sort",
+#         "-@", str(threads),
+#         "-O", "bam",
+#         "-o", str(bam_file),
+#     ]
+#     p1 = sp.Popen(cmd_map, stdout=sp.PIPE, stderr=sp.PIPE, text=False)
+#     p2 = sp.Popen(cmd_sort, stdin=p1.stdout, stdout=sp.PIPE, stderr=sp.PIPE, text=False)
+#     if p1.stdout:
+#         p1.stdout.close()
+#     sort_stdout, sort_stderr = p2.communicate()
+#     map_stderr = p1.stderr.read() if p1.stderr else b""
+#     rc1 = p1.wait()
+#     if rc1 != 0:
+#         raise sp.CalledProcessError(rc1, cmd_map, None, map_stderr)
+#     if p2.returncode != 0:
+#         raise sp.CalledProcessError(p2.returncode, cmd_sort, sort_stdout, sort_stderr)
+#     # BAM index (not strictly required for sequential mpileup, but recommended).
+#     sp.run([BIN_SAM, "index", str(bam_file)], check=True)
+#     return bam_file
+
+
 def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -> Path:
     """Map HiFi reads and return sorted indexed BAM.
     """
@@ -37,15 +74,13 @@ def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -
     threads = max(1, threads // 2)
     bam_file = base.with_suffix(".sorted.bam")
 
-    # Ensure reference index exists for mpileup.
     fai = reference.with_suffix(reference.suffix + ".fai")
     if not fai.exists():
-        sp.run(["samtools", "faidx", str(reference)], check=True)
+        sp.run([BIN_SAM, "faidx", str(reference)], check=True)
 
-    # --- map & sort ---
     cmd_map = [
         BIN_MIN, "-ax", "map-hifi",
-        "-R", f"@RG\\tID:{base}\\tSM:{base}",  # store sample name.
+        "-R", f"@RG\\tID:{base.name}\\tSM:{base.name}",
         "-t", str(threads),
         str(reference),
         str(gametes),
@@ -55,22 +90,27 @@ def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -
         "-@", str(threads),
         "-O", "bam",
         "-o", str(bam_file),
+        "-T", str(base.with_suffix(".sorttmp")),
     ]
-    p1 = sp.Popen(cmd_map, stdout=sp.PIPE, stderr=sp.PIPE, text=False)
-    p2 = sp.Popen(cmd_sort, stdin=p1.stdout, stdout=sp.PIPE, stderr=sp.PIPE, text=False)
-    if p1.stdout:
-        p1.stdout.close()
-    sort_stdout, sort_stderr = p2.communicate()
-    map_stderr = p1.stderr.read() if p1.stderr else b""
-    rc1 = p1.wait()
-    if rc1 != 0:
-        raise sp.CalledProcessError(rc1, cmd_map, None, map_stderr)
-    if p2.returncode != 0:
-        raise sp.CalledProcessError(p2.returncode, cmd_sort, sort_stdout, sort_stderr)
 
-    # BAM index (not strictly required for sequential mpileup, but recommended).
-    sp.run([BIN_SAM, "index", str(bam_file)], check=True)
+    p1 = sp.Popen(cmd_map, stdout=sp.PIPE, stderr=None)
+    p2 = sp.Popen(cmd_sort, stdin=p1.stdout, stderr=None)
+
+    assert p1.stdout is not None
+    p1.stdout.close()
+
+    rc2 = p2.wait()
+    rc1 = p1.wait()
+
+    if rc1 != 0:
+        raise sp.CalledProcessError(rc1, cmd_map)
+    if rc2 != 0:
+        raise sp.CalledProcessError(rc2, cmd_sort)
+
+    sp.run([BIN_SAM, "index", "-@", str(threads), str(bam_file)], check=True)
     return bam_file
+
+
 
 
 def call_variants_bcftools(reference: Path, bam_file: Path, base: Path, min_map_q: int, min_base_q: int):
