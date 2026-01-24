@@ -1,3 +1,0 @@
-disto_cli
-scripts
-src

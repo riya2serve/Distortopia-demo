@@ -1,2 +1,0 @@
-[console_scripts]
-disto = disto_cli.cli:main
