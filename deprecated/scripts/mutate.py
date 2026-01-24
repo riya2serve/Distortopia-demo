@@ -2,7 +2,7 @@ import random
 from Bio import SeqIO
 from Bio.Seq import Seq
 
-def mutate_fasta(input_fasta, output_fasta, snp_rate=0.001, indel_rate=0.0, seed=42):
+def mutate_fasta(input_fasta, output_fasta, snp_rate=0.001, indel_rate=0.0, seed: random.Random=123):
     rng = random.Random(seed)
     nts = ("A", "C", "G", "T")
 

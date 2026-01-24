@@ -196,6 +196,7 @@ def run(
         rows.append(row)
     return pd.DataFrame(rows)
 
+
 def streamlit_panel(state):
     st.header("3) Cross-map long reads & call variants → data/ (uncompressed VCF)")
     col1,col2 = st.columns(2)
@@ -250,3 +251,4 @@ def streamlit_panel(state):
             st.success("Done.")
         except Exception as e:
             st.error(str(e))
+
