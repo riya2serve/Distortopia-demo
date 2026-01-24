@@ -7,7 +7,7 @@ dependencies:
   - python=3.12
   - pandas
   - numpy
-  - matplotlib
+  # - matplotlib
   - bcftools
   - samtools
   - minimap2

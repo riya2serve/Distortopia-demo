@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "disto"
+version = "0.1.0-a1"
+requires-python = ">= 3.8"
+license = { file = "LICENSE.txt" }
+dependencies = [
+    "loguru",
+    "numpy",
+]
+description = "Recombination map estimation from long-read sequenced gametes"
+readme = {file = "README.md", content-type = "text/markdown"}
+keywords = ["recombination", "gametes", "pacbio", "long-reads"]
+classifiers =[
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+	"Development Status :: 4 - Beta",    
+]
+authors = [
+	{name = "Deren Eaton", email="de2356@columbia.edu"},
+    # {name = "Riya Rampali", email="..."},
+]
+maintainers = [
+	{name = "Deren Eaton", email="de2356@columbia.edu"},
+    # {name = "Riya Rampali", email="..."},
+]
+
+[project_urls]
+Repository = "https://github.com/eaton-lab/Distortopia-demo"
+
+[project.scripts]
+disto = "src:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
