@@ -2,7 +2,6 @@
 
 import argparse
 from pathlib import Path
-from .make_wide import make_wide
 
 
 def _setup_infer_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
@@ -11,7 +10,7 @@ def _setup_infer_subparser(subparsers: argparse._SubParsersAction, header: str =
         "infer",
         description=header,
         help="Infer crossover map",
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
+        formatter_class=lambda prog: RawDescriptionHelpFormatter(prog, width=120, max_help_position=120),
     )
     parser.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,

@@ -82,6 +82,7 @@ def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -
         BIN_MIN, "-ax", "map-hifi",
         "-R", f"@RG\\tID:{base.name}\\tSM:{base.name}",
         "-t", str(threads),
+        # "--secondary", "no",  # drop secondaries right away
         str(reference),
         str(gametes),
     ]

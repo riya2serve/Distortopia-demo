@@ -40,7 +40,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         prog="disto",
         description=f"{HEADER}\n{DESCRIPTION}",
         # epilog=EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=lambda prog: RawDescriptionHelpFormatter(prog, width=120, max_help_position=120),
         add_help=False,
     )
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)

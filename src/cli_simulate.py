@@ -10,7 +10,7 @@ def _setup_simulate_subparser(subparsers: argparse._SubParsersAction, header: st
         "simulate",
         description=header,
         help="Simulate recombinant gametes",
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
+        formatter_class=lambda prog: RawDescriptionHelpFormatter(prog, width=120, max_help_position=120),        
     )
     parser.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,

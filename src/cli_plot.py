@@ -11,7 +11,7 @@ def _setup_plot_subparser(subparsers: argparse._SubParsersAction, header: str = 
         "plot",
         description=header,
         help="Plot crossover position distribution",
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
+        formatter_class=lambda prog: RawDescriptionHelpFormatter(prog, width=120, max_help_position=120),
     )
     parser.add_argument(
         "-t", "--tsv", metavar="Path", type=Path, required=True,
