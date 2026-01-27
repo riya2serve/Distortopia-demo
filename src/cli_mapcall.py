@@ -10,7 +10,7 @@ def _setup_mapcall_subparser(subparsers: argparse._SubParsersAction, header: str
         "mapcall",
         description=header,
         help="Call variants from long read gamete pool",
-        formatter_class=lambda prog: RawDescriptionHelpFormatter(prog, width=120, max_help_position=120),        
+        formatter_class=lambda prog: argparse.RawDescriptionHelpFormatter(prog, width=120, max_help_position=120),        
     )
     parser.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
