@@ -3,7 +3,6 @@
 
 import sys
 import argparse
-# from .make_wide import make_wide
 from .cli_simulate import _setup_simulate_subparser
 from .cli_mapcall import _setup_mapcall_subparser
 from .cli_infer import _setup_infer_subparser

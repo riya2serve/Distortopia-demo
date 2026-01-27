@@ -2,7 +2,6 @@
 
 import argparse
 from pathlib import Path
-from .make_wide import make_wide
 
 
 def _setup_mapcall_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
