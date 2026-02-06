@@ -175,6 +175,8 @@ def run_subcommand(args):
             tsv=args.tsv,
             outdir=args.out,
             prefix=args.prefix,
+            chroms=args.chrom, 
+            bins=args.bins
         )
         sys.exit(0)
 
