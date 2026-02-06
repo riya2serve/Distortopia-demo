@@ -1,14 +1,16 @@
 #!/usr/bin/env python
-
-"""Map long reads to a reference haplotype and call variants.
+"""
+Map long reads to a reference haplotype and call variants.
 
 Pipeline:
 1) minimap2 -> samtools sort -> BAM (+ index)
 2) bcftools mpileup/call -> VCF.gz (+ index)
 3) whatshap phase -> phased VCF.gz (+ index)
 
-Notes:
-- whatshap thread flag differs across installs (--threads vs --jobs). We detect.
+Robustness:
+- WhatsHap thread flag differs across installs (--threads vs --jobs). We detect.
+- WhatsHap may write UNCOMPRESSED VCF even if output filename ends with .gz.
+  We therefore always write a tmp .vcf, then bgzip it via bcftools to .vcf.gz.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -
         "-",  # read SAM from stdin
     ]
 
-    # Stream minimap2 -> samtools sort; let stderr go to Slurm logs (no PIPE)
+    # Stream minimap2 -> samtools sort
     p1 = sp.Popen(cmd_map, stdout=sp.PIPE, stderr=None)
     p2 = sp.Popen(cmd_sort, stdin=p1.stdout, stderr=None)
     assert p1.stdout is not None
@@ -65,7 +67,7 @@ def map_reads_to_bam(reference: Path, gametes: Path, base: Path, threads: int) -
     if rc2 != 0:
         raise sp.CalledProcessError(rc2, cmd_sort)
 
-    # BAM index (use threads)
+    # BAM index
     sp.run([BIN_SAM, "index", "-@", str(threads), str(bam_file)], check=True)
     return bam_file
 
@@ -120,7 +122,7 @@ def call_variants_bcftools(
     # Validate compressed stream is complete (works for bgzip too)
     sp.run(["gzip", "-t", str(tmp_vcf_gz)], check=True)
 
-    # Atomic publish: replace any existing final file only after validation
+    # Atomic publish
     os.replace(tmp_vcf_gz, final_vcf_gz)
 
     # Index the published VCF
@@ -129,10 +131,7 @@ def call_variants_bcftools(
 
 
 def _whatshap_thread_flag() -> str | None:
-    """
-    Detect whether whatshap supports --threads or --jobs (or neither).
-    Returns the supported flag name, or None.
-    """
+    """Detect whether whatshap supports --threads or --jobs (or neither)."""
     try:
         help_txt = sp.check_output([BIN_WHA, "phase", "-h"], text=True)
     except Exception:
@@ -146,12 +145,21 @@ def _whatshap_thread_flag() -> str | None:
 
 
 def phase_vcf(reference: Path, bam_path: Path, vcf_gz: Path, base: Path, threads: int) -> Path:
-    """Phase VCF file with whatshap. Returns phased bgzipped VCF (.phased.vcf.gz)."""
+    """
+    Phase VCF file with whatshap.
+
+    Always outputs bgzipped .phased.vcf.gz, regardless of whether WhatsHap itself
+    writes compressed or uncompressed output.
+    """
     logger.info("phasing VCF")
     threads = max(1, int(threads))
 
-    final_phased = base.with_suffix(".phased.vcf.gz")
-    tmp_phased = Path(str(final_phased) + ".tmp")
+    final_phased_gz = base.with_suffix(".phased.vcf.gz")
+
+    # Always write an UNCOMPRESSED tmp VCF first
+    tmp_vcf = Path(str(final_phased_gz) + ".tmp.vcf")
+    # Then compress it ourselves to tmp.gz, validate, and publish atomically
+    tmp_gz = Path(str(final_phased_gz) + ".tmp.gz")
 
     thread_flag = _whatshap_thread_flag()
 
@@ -160,19 +168,32 @@ def phase_vcf(reference: Path, bam_path: Path, vcf_gz: Path, base: Path, threads
         cmd.extend([thread_flag, str(threads)])
     cmd.extend([
         "--reference", str(reference),
-        "-o", str(tmp_phased),      # TMP
+        "-o", str(tmp_vcf),
         str(vcf_gz),
         str(bam_path),
     ])
 
     sp.run(cmd, check=True)
 
-    # Validate compressed stream is complete (works for bgzip too)
-    sp.run(["gzip", "-t", str(tmp_phased)], check=True)
-    os.replace(tmp_phased, final_phased)
+    # bgzip the VCF -> .vcf.gz using bcftools (already in your env)
+    sp.run([BIN_BCF, "view", "-Oz", "-o", str(tmp_gz), str(tmp_vcf)], check=True)
 
-    sp.run([BIN_BCF, "index", "-f", str(final_phased)], check=True)
-    return final_phased
+    # Validate compressed stream is complete
+    sp.run(["gzip", "-t", str(tmp_gz)], check=True)
+
+    # Atomic publish
+    os.replace(tmp_gz, final_phased_gz)
+
+    # Index published VCF.gz
+    sp.run([BIN_BCF, "index", "-f", str(final_phased_gz)], check=True)
+
+    # Cleanup
+    try:
+        tmp_vcf.unlink()
+    except FileNotFoundError:
+        pass
+
+    return final_phased_gz
 
 
 def run_mapcall(
