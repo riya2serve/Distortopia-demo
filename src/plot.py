@@ -5,12 +5,12 @@ Plot crossover (recombination) frequency along chromosomes from disto infer TSV.
 Expected TSV columns (from infer.py):
     scaff, start, end, nsnps, phased_snps, crossover_left, crossover_right, read
 
-This script:
+This plot:
 - Uses crossover midpoint = (crossover_left + crossover_right)/2 for rows with a crossover.
-- Masks chromosome ends based on read alignment start/end (read_length bp from each end).
-- Produces:
-  * default: one multi-page PDF <prefix>.pdf (one page per chromosome)
-  * optional: one PDF per chromosome (<prefix>.<chrom>.pdf) if one_file_per_chrom=True
+- Masks ends based on read alignment start/end columns (read_length bp from each end).
+- Writes ONE PDF PER CHROMOSOME:
+    <prefix>.<chrom>.pdf
+If you pass chroms=[...], it will only write those.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import toyplot.pdf
 from loguru import logger
 
 
-OUT_COLUMNS_REQUIRED = {"scaff", "start", "end", "crossover_left", "crossover_right", "read"}
+REQUIRED_COLS = {"scaff", "start", "end", "crossover_left", "crossover_right", "read"}
 
 
 def _to_numeric(series: pd.Series) -> pd.Series:
@@ -38,36 +38,27 @@ def run_plot(
     outdir: Path,
     prefix: str,
     chroms: Optional[List[str]] = None,
-    bins: int = 100,
+    bins: int = 50,
     read_length: int = 100_000,
     nreads_total: Optional[int] = None,
-    one_file_per_chrom: bool = False,
 ) -> None:
-    """
-    Args:
-        tsv: disto infer output TSV
-        outdir: output directory
-        prefix: output prefix
-        chroms: optional list of chromosomes/contigs to plot (None = all)
-        bins: number of histogram bins
-        read_length: mask ends (bp) using read alignment spans (start/end columns)
-        nreads_total: optional normalization constant; if None, normalizes by unique reads per chrom
-        one_file_per_chrom: if True, write <prefix>.<chrom>.pdf per chrom instead of multi-page PDF
-    """
     tsv = Path(tsv).expanduser().resolve()
     outdir = Path(outdir).expanduser().resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # infer.py writes tab-separated TSV
+    # infer.py writes TAB-separated TSV
     data = pd.read_csv(tsv, sep="\t")
 
-    missing = OUT_COLUMNS_REQUIRED - set(data.columns)
+    missing = REQUIRED_COLS - set(data.columns)
     if missing:
         raise ValueError(f"TSV missing required columns: {sorted(missing)}")
 
+    # Normalize scaff column to string
+    data["scaff"] = data["scaff"].astype(str)
+
     # Optional filter by chromosome(s)
     if chroms:
-        chrom_set = set(chroms)
+        chrom_set = set(map(str, chroms))
         data = data[data["scaff"].isin(chrom_set)].copy()
         if data.empty:
             raise ValueError(f"No rows found for chrom(s): {chroms}. Check contig names in TSV.")
@@ -78,7 +69,7 @@ def run_plot(
     data["crossover_left"] = _to_numeric(data["crossover_left"])
     data["crossover_right"] = _to_numeric(data["crossover_right"])
 
-    # Keep only rows with an inferred crossover window
+    # Keep only rows with inferred crossovers
     data = data.dropna(subset=["start", "end", "crossover_left", "crossover_right"])
     if data.empty:
         raise ValueError("No crossover rows found (all crossover_left/right are NA). Nothing to plot.")
@@ -88,9 +79,7 @@ def run_plot(
 
     chrom_list = list(data["scaff"].unique())
 
-    # Multi-page PDF accumulation
-    pages: List[toyplot.Canvas] = []
-    multipage_out = outdir / f"{prefix}.pdf"
+    wrote_any = False
 
     for chrom in chrom_list:
         sub = data.loc[data["scaff"] == chrom].copy()
@@ -106,7 +95,7 @@ def run_plot(
             logger.warning(f"{chrom}: no crossover rows remain after end-masking; skipping.")
             continue
 
-        # Normalization
+        # Normalization (default: unique reads for this chrom)
         if nreads_total is None:
             n_norm = int(sub["read"].nunique())
             if n_norm <= 0:
@@ -116,10 +105,9 @@ def run_plot(
             n_norm = max(1, int(nreads_total))
 
         cxs = sub["cx_mid"].to_numpy()
-
         mags, bin_edges = np.histogram(cxs, bins=bins)
 
-        # Normalize to frequency per read per bin
+        # Normalize: frequency per read per bin
         mags = mags / float(n_norm)
 
         # Convert x-axis to Mb
@@ -134,16 +122,12 @@ def run_plot(
             margin=60,
         )
 
-        # Add a title using canvas text (Toyplot Cartesian has no .title)
+        # Title (Toyplot: use canvas.text)
         canvas.text(
             300,
             20,
             f"{prefix} — {chrom} (N={n_norm} reads)",
-            style={
-                "font-size": "16px",
-                "font-weight": "bold",
-                "text-anchor": "middle",
-            },
+            style={"font-size": "16px", "font-weight": "bold", "text-anchor": "middle"},
         )
 
         # Styling (kept close to your original)
@@ -169,18 +153,13 @@ def run_plot(
         m0._fill.color = "#d1cef6"
         m1._stroke.color = "#7b6de2"
 
-        if one_file_per_chrom:
-            out = outdir / f"{prefix}.{chrom}.pdf"
-            toyplot.pdf.render(canvas, str(out))
-            logger.info(f"wrote {out}")
-        else:
-            pages.append(canvas)
+        out = outdir / f"{prefix}.{chrom}.pdf"
+        toyplot.pdf.render(canvas, str(out))
+        logger.info(f"wrote {out}")
+        wrote_any = True
 
-    if not one_file_per_chrom:
-        if not pages:
-            raise ValueError("No plots generated (all chromosomes empty after filtering/masking).")
-        toyplot.pdf.render(pages, str(multipage_out))
-        logger.info(f"wrote {multipage_out}")
+    if not wrote_any:
+        raise ValueError("No plots generated (all chromosomes empty after filtering/masking).")
 
 
 if __name__ == "__main__":
