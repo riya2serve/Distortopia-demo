@@ -1,25 +1,29 @@
 #!/usr/bin/env python
 
-
 import sys
 import argparse
-# from .make_wide import make_wide
+
+from loguru import logger
+
+# CLI subparser setup functions
 from .cli_simulate import _setup_simulate_subparser
 from .cli_mapcall import _setup_mapcall_subparser
+from .cli_filter import _setup_filter_subparser 
 from .cli_infer import _setup_infer_subparser
 from .cli_plot import _setup_plot_subparser
+
+# Workhorses
 from .simulate import run_simulate
 from .mapcall import run_mapcall
+from .filter import run_filter                 
 from .infer import run_infer
 from .plot import run_plot
-# from ..utils.exceptions import DistoError
-# from setup_logger import set_log_level
-from loguru import logger
 
 """
 disto simulate -r REF.fa -p GAMETES -n 10_000_000 -l 100_000 -s 123
-disto call -r REF.fa -g GAMETES.fastq.gz -o . -q 10 -Q 20
-disto infer -r REF -v GAMETES.vcf -o . -p RATES
+disto mapcall -r REF.fa -g GAMETES.fastq.gz -o . -q 10 -Q 20
+disto filter --vcf GAMETES.vcf.gz --bam GAMETES.sorted.bam -o .
+disto infer -r REF -v GAMETES.phased.vcf.gz -o . -p RATES
 disto plot -t RATES.tsv -o .
 """
 
@@ -39,19 +43,37 @@ def setup_parsers() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="disto",
         description=f"{HEADER}\n{DESCRIPTION}",
-        # epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False,
     )
-    parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
-    parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
+    parser.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
+
+    # NOTE: your version string currently says "ipyrad". Changing to "disto" is more correct.
+    parser.add_argument("-v", "--version", action="version", version=f"disto {VERSION}")
+
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
     # add subcommands: these messages are subcommand headers
-    _setup_simulate_subparser(subparser, f"{HEADER}\ndisto simulate: demultiplex pooled reads to sample files by index/barcode")
-    _setup_mapcall_subparser(subparser, f"{HEADER}\ndisto mapcall: map reads, call variants, find recombinants")
-    _setup_infer_subparser(subparser, f"{HEADER}\ndisto infer: infer crossover map from recombinants")
-    _setup_plot_subparser(subparser, f"{HEADER}\ndisto plot: plot crossover distributions")    
+    _setup_simulate_subparser(
+        subparser,
+        f"{HEADER}\ndisto simulate: demultiplex pooled reads to sample files by index/barcode",
+    )
+    _setup_mapcall_subparser(
+        subparser,
+        f"{HEADER}\ndisto mapcall: map reads, call variants, find recombinants",
+    )
+    _setup_filter_subparser(  # NEW
+        subparser,
+        f"{HEADER}\ndisto filter: filter mapcall VCF to biallelic SNPs + heterozygous sites only",
+    )
+    _setup_infer_subparser(
+        subparser,
+        f"{HEADER}\ndisto infer: infer crossover map from recombinants",
+    )
+    _setup_plot_subparser(
+        subparser,
+        f"{HEADER}\ndisto plot: plot crossover distributions",
+    )
     return parser
 
 
@@ -61,12 +83,6 @@ def main():
     except KeyboardInterrupt:
         logger.error("interrupted by user. Shutting down.")
         sys.exit(1)
-    # expected error, only report message no traceback
-    # except DistoError as exc:
-    #     logger.error(f"Error: {exc}")
-    #     logger.error("see error message above. Shutting down.")
-    #     sys.exit(1)
-    # raise with traceback
     except Exception as exc:
         logger.exception("Unexpected error: see traceback below.")
         raise exc
@@ -79,11 +95,8 @@ def command_line():
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
         pass
-        # set_log_level(args.log_level, args.log_file)
-        # logger.info("HI")
 
-    if args.subcommand not in ["simulate", "mapcall", "infer", "plot"]:
-        # NO SUBCOMMAND: print help
+    if args.subcommand not in ["simulate", "mapcall", "filter", "infer", "plot"]:  # NEW
         parser.print_help()
         sys.exit(0)
     else:
@@ -106,7 +119,6 @@ def run_subcommand(args):
             random_seed=args.random_seed,
             chromosomes=args.chromosomes,
             interference=args.interference,
-            # log_level=args.log_level,
         )
         sys.exit(0)
 
@@ -122,9 +134,22 @@ def run_subcommand(args):
             min_map_q=args.min_map_q,
             min_base_q=args.min_base_q,
             threads=args.threads,
-            # log_level=args.log_level,
         )
-        sys.exit(0)     
+        sys.exit(0)
+
+    if args.subcommand == "filter":  # NEW
+        logger.info("----------------------------------------------------------------")
+        logger.info("----- disto filter: biallelic SNPs + heterozygous sites only ---")
+        logger.info("----------------------------------------------------------------")
+        run_filter(
+            vcf_gz=args.vcf,
+            outdir=args.out,
+            prefix=args.prefix,
+            threads=args.threads,
+            bam=args.bam,
+            keep_tmp=args.keep_tmp,
+        )
+        sys.exit(0)
 
     if args.subcommand == "infer":
         logger.info("----------------------------------------------------------------")
@@ -137,12 +162,10 @@ def run_subcommand(args):
             outdir=args.out,
             prefix=args.prefix,
             min_snps=args.min_snps,
-            # log_level=args.log_level,
             threads=args.threads,
             edge_mask_bp=args.edge_mask_bp,
         )
-        sys.exit(0)     
-
+        sys.exit(0)
 
     if args.subcommand == "plot":
         logger.info("----------------------------------------------------------------")
@@ -152,13 +175,10 @@ def run_subcommand(args):
             tsv=args.tsv,
             outdir=args.out,
             prefix=args.prefix,
-            # min_snps=args.min_snps,
-            # log_level=args.log_level,
         )
-        sys.exit(0)     
-
+        sys.exit(0)
 
 
 if __name__ == "__main__":
-
     main()
+
