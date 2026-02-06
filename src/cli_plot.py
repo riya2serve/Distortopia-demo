@@ -28,6 +28,12 @@ def _setup_plot_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Chromosome/contig to plot (can repeat: -c chr1 -c chr2). Default: all."
     )
     parser.add_argument(
+        "--bins", 
+        type=int, 
+        default=25, 
+        help="Histogram bins per chromosome (default: 25)"
+    )
+    parser.add_argument(
         "-p", "--prefix", metavar="str", type=str, default="test",
         help="Prefix for output files.",
     )
