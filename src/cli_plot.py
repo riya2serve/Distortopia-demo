@@ -22,6 +22,12 @@ def _setup_plot_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Output directory.",
     )
     parser.add_argument(
+        "-c", "--chrom",
+        action="append",
+        default=None,
+        help="Chromosome/contig to plot (can repeat: -c chr1 -c chr2). Default: all."
+    )
+    parser.add_argument(
         "-p", "--prefix", metavar="str", type=str, default="test",
         help="Prefix for output files.",
     )
