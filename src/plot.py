@@ -126,14 +126,25 @@ def run_plot(
         bin_edges_mb = bin_edges / 1e6
         mids_mb = (bin_edges_mb[:-1] + bin_edges_mb[1:]) / 2.0
 
-        # Canvas
+        # Canvas + axes
         canvas = toyplot.Canvas(width=600, height=350)
         axes = canvas.cartesian(
             xlabel="Chromosome position (Mb)",
             ylabel="Crossover frequency (per read per bin)",
             margin=60,
         )
-        axes.title.text = f"{prefix} — {chrom} (N={n_norm} reads)"
+
+        # Add a title using canvas text (Toyplot Cartesian has no .title)
+        canvas.text(
+            300,
+            20,
+            f"{prefix} — {chrom} (N={n_norm} reads)",
+            style={
+                "font-size": "16px",
+                "font-weight": "bold",
+                "text-anchor": "middle",
+            },
+        )
 
         # Styling (kept close to your original)
         axes.x.ticks.show = True
