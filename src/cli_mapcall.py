@@ -30,6 +30,10 @@ def _setup_mapcall_subparser(subparsers: argparse._SubParsersAction, header: str
         help="Prefix for output files.",
     )
     parser.add_argument(
+        "-d", "--max-depth", metavar="int", type=int, default=200,
+        help="Maximum read depth per position for mpileup. Use 0 to disable capping. [default=200]",
+    )
+    parser.add_argument(
         "-q", "--min-map-q", metavar="int", type=int, default=10,
         help="Minimum alignment score. [default=10]",
     )
