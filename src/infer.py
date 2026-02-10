@@ -1,24 +1,33 @@
 #!/usr/bin/env python
+"""
+Generate TSV with inferred crossover window for each recombinant read.
 
-"""Generate TSV with inferred crossover window for each recombinant read
+Parallel per-contig version (mimics filter.py):
+  - Determine contigs (prefer BAM idxstats; fallback to VCF header)
+  - For each contig, run samtools view restricted to that contig
+  - Infer crossover windows per read and write tmp/<contig>.tsv
+  - Concatenate tmp TSVs in contig order into final <prefix>.tsv
 
-Buffered pandas version:
-- Uses pandas DataFrame chunks
-- Uses DataFrame.to_csv(..., mode="a", chunksize=...)
-- No csv module, no new imports
-
-TODO:
-    - parallelize                      # done via samtools -@ <threads>
-    - mask/exclude near chrom ends     # done via edge_mask_bp and reference .fai
+Notes:
+  - Uses conda-env samtools via Path(sys.prefix)/bin/samtools
+  - threads parameter is used as number of worker processes (per contig)
 """
 
 from __future__ import annotations
+
 from typing import Dict, List, Tuple, Iterator, Optional, Set
 from pathlib import Path
+import os
+import sys
 import gzip
 import subprocess as sp
-import pandas as pd
+from multiprocessing import Pool
 from loguru import logger
+
+
+# conda env binaries (like filter.py)
+BIN = Path(sys.prefix) / "bin"
+BIN_SAM = str(BIN / "samtools")
 
 
 # CIGAR ops that consume reference/query
@@ -36,6 +45,40 @@ OUT_COLUMNS = [
     "crossover_right",
     "read",
 ]
+
+
+def contigs_from_bam(bam: Path) -> list[str]:
+    """Use samtools idxstats to get contig list from BAM."""
+    out = sp.check_output([BIN_SAM, "idxstats", str(bam)], text=True)
+    contigs: list[str] = []
+    for line in out.splitlines():
+        name = line.split("\t", 1)[0]
+        if name and name != "*":
+            contigs.append(name)
+    return contigs
+
+
+def contigs_from_vcf(vcf_gz: Path) -> list[str]:
+    """Fallback: parse ##contig=<ID=...> from VCF header (using gzip; no bcftools required)."""
+    contigs: list[str] = []
+    with gzip.open(vcf_gz, "rt") as fh:
+        for line in fh:
+            if line.startswith("##contig=") and "ID=" in line:
+                try:
+                    inside = line.split("<", 1)[1].rsplit(">", 1)[0]
+                    parts = {}
+                    for p in inside.split(","):
+                        if "=" in p:
+                            k, v = p.split("=", 1)
+                            parts[k] = v
+                    cid = parts.get("ID")
+                    if cid:
+                        contigs.append(cid)
+                except Exception:
+                    continue
+            elif line.startswith("#CHROM"):
+                break
+    return contigs
 
 
 def load_phased_biallelic_snps(vcf_gz: Path) -> Dict[str, List[Tuple[int, str, str]]]:
@@ -90,7 +133,7 @@ def load_phased_biallelic_snps(vcf_gz: Path) -> Dict[str, List[Tuple[int, str, s
 
 
 def _parse_cigar(cigar: str) -> List[Tuple[str, int]]:
-    ops = []
+    ops: List[Tuple[str, int]] = []
     n = 0
     for ch in cigar:
         if ch.isdigit():
@@ -109,9 +152,9 @@ def _ref_end_from_cigar(pos1: int, cigar_ops: List[Tuple[str, int]]) -> int:
 def _get_chrom_lengths(reference: Path) -> Dict[str, int]:
     fai = Path(str(reference) + ".fai")
     if not fai.exists():
-        sp.check_call(["samtools", "faidx", str(reference)])
+        sp.check_call([BIN_SAM, "faidx", str(reference)])
 
-    lengths = {}
+    lengths: Dict[str, int] = {}
     with fai.open() as fh:
         for line in fh:
             chrom, length_s, *_ = line.rstrip("\n").split("\t")
@@ -119,25 +162,36 @@ def _get_chrom_lengths(reference: Path) -> Dict[str, int]:
     return lengths
 
 
-def read_crossovers(
-    bam_path: Path,
-    phased_dict: Dict[str, List[Tuple[int, str, str]]],
-    min_snps: int,
-    chrom_lengths: Dict[str, int],
-    edge_mask_bp: int,
-    threads: int,
-    include_scaffs: Optional[Set[str]] = None,
-) -> Iterator[Dict[str, object]]:
-    """Yield crossover rows one at a time (pandas-friendly streaming)."""
+def _infer_contig_worker(args: tuple[str, str, str, list[tuple[int, str, str]], int, int, int, str]) -> str:
+    """
+    Worker: infer crossovers on one contig and write tmp/<contig>.tsv.
 
-    cmd = ["samtools", "view", "-h", "-F", "0x904"]
-    if threads > 1:
-        cmd.extend(["-@", str(threads)])
-    cmd.append(str(bam_path))
+    args:
+      contig, bam_path, contig_name, phased_sites, chrom_len, min_snps, edge_mask_bp, tmpdir
+    """
+    contig, bam_path, contig_name, phased_sites, chrom_len, min_snps, edge_mask_bp, tmpdir = args
+    tmpdir_p = Path(tmpdir)
+    out_tsv = tmpdir_p / f"{contig}.tsv"
+    out_tmp = Path(str(out_tsv) + f".tmp.{os.getpid()}")
 
+    # If no phased SNPs on this contig, write empty (with no rows)
+    if not phased_sites:
+        out_tmp.write_text("")  # empty file
+        os.replace(out_tmp, out_tsv)
+        return str(out_tsv)
+
+    # samtools view for just this contig; keep primary alignments only (-F 0x904)
+    cmd = [BIN_SAM, "view", "-h", "-F", "0x904", str(bam_path), contig_name]
     proc = sp.Popen(cmd, stdout=sp.PIPE, text=True, bufsize=1)
 
+    # phased_sites is sorted by position
+    snp_i = 0  # advances monotonically because BAM is coordinate-sorted per contig
+
+    # write buffered lines (TSV without header; main process adds header once)
+    lines: List[str] = []
+
     try:
+        assert proc.stdout is not None
         for line in proc.stdout:
             if line.startswith("@"):
                 continue
@@ -146,50 +200,82 @@ def read_crossovers(
             if len(parts) < 11:
                 continue
 
-            qname, rname, pos1, cigar, seq = (
-                parts[0],
-                parts[2],
-                int(parts[3]),
-                parts[5],
-                parts[9],
-            )
-
-            if rname == "*" or rname not in phased_dict:
+            qname = parts[0]
+            rname = parts[2]
+            if rname == "*" or rname != contig_name:
                 continue
-            if include_scaffs and rname not in include_scaffs:
+
+            pos1 = int(parts[3])
+            cigar = parts[5]
+            seq = parts[9]
+            if cigar == "*" or seq == "*":
                 continue
 
             cigar_ops = _parse_cigar(cigar)
             ref_end1 = _ref_end_from_cigar(pos1, cigar_ops)
+            if ref_end1 < pos1:
+                continue
 
-            ref2base = {}
-            rpos, qpos = pos1, 0
+            # advance snp_i to first SNP >= pos1 (monotonic)
+            while snp_i < len(phased_sites) and phased_sites[snp_i][0] < pos1:
+                snp_i += 1
+            if snp_i >= len(phased_sites) or phased_sites[snp_i][0] > ref_end1:
+                continue
+
+            # walk CIGAR and “jump” to SNP positions (avoid building a full ref->base map)
+            snp_pos: List[int] = []
+            bits: List[int] = []
+
+            j = snp_i  # local SNP pointer for this read
+            rpos = pos1
+            qpos = 0
+
             for op, length in cigar_ops:
+                if length <= 0:
+                    continue
+
                 if op in ("M", "=", "X"):
-                    for _ in range(length):
-                        ref2base[rpos] = seq[qpos]
-                        rpos += 1
-                        qpos += 1
+                    block_start = rpos
+                    block_end = rpos + length  # half-open [start, end)
+
+                    # consume SNPs that fall in this match block
+                    while j < len(phased_sites):
+                        p, a0, a1 = phased_sites[j]
+                        if p < block_start:
+                            j += 1
+                            continue
+                        if p >= block_end:
+                            break
+
+                        offset = p - block_start
+                        # offset maps to query index within this block
+                        qi = qpos + offset
+                        if 0 <= qi < len(seq):
+                            b = seq[qi]
+                            if b == a0:
+                                snp_pos.append(p)
+                                bits.append(0)
+                            elif b == a1:
+                                snp_pos.append(p)
+                                bits.append(1)
+                        j += 1
+
+                    rpos += length
+                    qpos += length
+
                 elif op == "I":
                     qpos += length
                 elif op in ("D", "N"):
                     rpos += length
                 elif op == "S":
                     qpos += length
-
-            snp_pos, bits = [], []
-            for p, a0, a1 in phased_dict[rname]:
-                if p < pos1:
+                else:
+                    # H, P, etc. consume neither or are not relevant here
                     continue
-                if p > ref_end1:
+
+                # early exit if we passed the end of the read region with respect to SNPs
+                if j < len(phased_sites) and phased_sites[j][0] > ref_end1:
                     break
-                b = ref2base.get(p)
-                if b == a0:
-                    snp_pos.append(p)
-                    bits.append(0)
-                elif b == a1:
-                    snp_pos.append(p)
-                    bits.append(1)
 
             if len(bits) < min_snps:
                 continue
@@ -205,24 +291,79 @@ def read_crossovers(
                 xl, xr = snp_pos[i - 1], snp_pos[i]
 
             if xl != "NA" and edge_mask_bp > 0:
-                clen = chrom_lengths[rname]
-                if not (edge_mask_bp <= xl <= clen - edge_mask_bp):
+                # filter crossovers too close to chrom ends
+                if not (edge_mask_bp <= int(xl) <= chrom_len - edge_mask_bp):
                     continue
 
-            yield {
-                "scaff": rname,
-                "start": pos1,
-                "end": ref_end1,
-                "nsnps": len(bits),
-                "phased_snps": "".join(map(str, bits)),
-                "crossover_left": xl,
-                "crossover_right": xr,
-                "read": qname,
-            }
+            # emit TSV row
+            # scaff, start, end, nsnps, phased_snps, crossover_left, crossover_right, read
+            lines.append(
+                f"{contig_name}\t{pos1}\t{ref_end1}\t{len(bits)}\t{''.join(map(str, bits))}\t{xl}\t{xr}\t{qname}\n"
+            )
+
+            # flush occasionally to avoid huge memory per worker
+            if len(lines) >= 200_000:
+                with out_tmp.open("a") as oh:
+                    oh.writelines(lines)
+                lines.clear()
 
     finally:
-        proc.stdout.close()
+        if proc.stdout is not None:
+            proc.stdout.close()
         proc.wait()
+
+    # final flush and publish atomically
+    if lines:
+        with out_tmp.open("a") as oh:
+            oh.writelines(lines)
+        lines.clear()
+
+    os.replace(out_tmp, out_tsv)
+    return str(out_tsv)
+
+
+def infer_per_contig_to_tsv(
+    bam_path: Path,
+    phased_dict: Dict[str, List[Tuple[int, str, str]]],
+    contigs: list[str],
+    chrom_lengths: Dict[str, int],
+    min_snps: int,
+    edge_mask_bp: int,
+    threads: int,
+    out_tsv: Path,
+    tmpdir: Path,
+) -> Path:
+    """Parallel per-contig infer, then concatenate tmp TSVs into out_tsv."""
+    threads = max(1, int(threads))
+    tmpdir.mkdir(parents=True, exist_ok=True)
+
+    # Prepare work
+    work: list[tuple[str, str, str, list[tuple[int, str, str]], int, int, int, str]] = []
+    for c in contigs:
+        phased_sites = phased_dict.get(c, [])
+        clen = chrom_lengths.get(c, 0)
+        work.append((c, str(bam_path), c, phased_sites, clen, int(min_snps), int(edge_mask_bp), str(tmpdir)))
+
+    logger.info(f"Inferring crossovers on {len(contigs)} contigs with {threads} workers")
+    with Pool(processes=threads) as pool:
+        pool.map(_infer_contig_worker, work)
+
+    # concatenate in contig order (header once)
+    out_tmp = Path(str(out_tsv) + ".tmp")
+    with out_tmp.open("w") as oh:
+        oh.write("\t".join(OUT_COLUMNS) + "\n")
+        for c in contigs:
+            part = tmpdir / f"{c}.tsv"
+            if not part.exists():
+                continue
+            # append part content (no header in parts)
+            with part.open("r") as fh:
+                for ln in fh:
+                    oh.write(ln)
+
+    os.replace(out_tmp, out_tsv)
+    logger.info(f"Wrote crossover table: {out_tsv}")
+    return out_tsv
 
 
 def run_infer(
@@ -235,54 +376,58 @@ def run_infer(
     threads: int = 1,
     edge_mask_bp: int = 0,
     include_scaffs: Optional[List[str]] = None,
-    chunk_size: int = 50_000,
+    chunk_size: int = 50_000,  # kept for API compatibility; not used in per-contig mode
 ):
-    """Infer crossover windows using buffered pandas writes."""
+    """Infer crossover windows using parallel per-contig processing (multiprocessing)."""
+    logger.info("inferring crossover positions (parallel per contig)")
 
-    logger.info("inferring crossover positions (buffered pandas)")
-
+    outdir = outdir.expanduser().absolute()
     outdir.mkdir(parents=True, exist_ok=True)
     outpath = outdir / f"{prefix}.tsv"
+    tmpdir = outdir / f".{prefix}.infer_tmp"
+
+    bam_path = bam_path.expanduser().absolute()
+    vcf_gz = vcf_gz.expanduser().absolute()
+    reference = reference.expanduser().absolute()
 
     phased_dict = load_phased_biallelic_snps(vcf_gz)
     chrom_lengths = _get_chrom_lengths(reference)
 
-    buffer: List[Dict[str, object]] = []
-    wrote_header = False
+    # Determine contigs (prefer BAM)
+    try:
+        contigs = contigs_from_bam(bam_path)
+    except Exception:
+        logger.warning("Could not derive contigs from BAM idxstats; falling back to VCF header contigs")
+        contigs = contigs_from_vcf(vcf_gz)
 
-    for row in read_crossovers(
+    if include_scaffs:
+        keep = set(include_scaffs)
+        contigs = [c for c in contigs if c in keep]
+
+    # Only keep contigs that appear in reference lengths (and in phased_dict, if you want)
+    contigs = [c for c in contigs if c in chrom_lengths]
+    if not contigs:
+        raise RuntimeError("No contigs to process after filtering. Check BAM/VCF/reference consistency.")
+
+    infer_per_contig_to_tsv(
         bam_path=bam_path,
         phased_dict=phased_dict,
-        min_snps=min_snps,
+        contigs=contigs,
         chrom_lengths=chrom_lengths,
-        edge_mask_bp=edge_mask_bp,
-        threads=threads,
-        include_scaffs=set(include_scaffs) if include_scaffs else None,
-    ):
-        buffer.append(row)
+        min_snps=int(min_snps),
+        edge_mask_bp=int(edge_mask_bp),
+        threads=int(threads),
+        out_tsv=outpath,
+        tmpdir=tmpdir,
+    )
 
-        if len(buffer) >= chunk_size:
-            df = pd.DataFrame(buffer, columns=OUT_COLUMNS)
-            df.to_csv(
-                outpath,
-                sep="\t",
-                index=False,
-                mode="w" if not wrote_header else "a",
-                header=not wrote_header,
-                chunksize=chunk_size,
-            )
-            wrote_header = True
-            buffer.clear()
-
-    if buffer:
-        df = pd.DataFrame(buffer, columns=OUT_COLUMNS)
-        df.to_csv(
-            outpath,
-            sep="\t",
-            index=False,
-            mode="w" if not wrote_header else "a",
-            header=not wrote_header,
-        )
-
-    logger.info(f"Wrote crossover table: {outpath}")
-
+    # cleanup tmpdir
+    for p in tmpdir.glob("*"):
+        try:
+            p.unlink()
+        except Exception:
+            pass
+    try:
+        tmpdir.rmdir()
+    except Exception:
+        pass
