@@ -128,14 +128,15 @@ def run_subcommand(args):
         logger.info("----------------------------------------------------------------")
         run_mapcall(
             reference=args.reference,
-            gametes=args.gametes,
+            reads=args.gametes,
             outdir=args.out,
             prefix=args.prefix,
-            max_depth=None if args.max_depth == 0 else args.max_depth,            
+            max_depth=None if args.max_depth == 0 else args.max_depth,
             min_map_q=args.min_map_q,
             min_base_q=args.min_base_q,
             threads=args.threads,
-        )
+            whatshap_threads_per_worker=1, 
+       )
         sys.exit(0)
 
     if args.subcommand == "filter":  # NEW
