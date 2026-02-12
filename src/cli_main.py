@@ -2,13 +2,12 @@
 
 import sys
 import argparse
-
 from loguru import logger
 
 # CLI subparser setup functions
 from .cli_simulate import _setup_simulate_subparser
 from .cli_mapcall import _setup_mapcall_subparser
-from .cli_filter import _setup_filter_subparser 
+from .cli_filter import _setup_filter_subparser
 from .cli_infer import _setup_infer_subparser
 from .cli_collapse import _setup_collapse_subparser
 from .cli_plot import _setup_plot_subparser
@@ -16,7 +15,7 @@ from .cli_plot import _setup_plot_subparser
 # Workhorses
 from .simulate import run_simulate
 from .mapcall import run_mapcall
-from .filter import run_filter                 
+from .filter import run_filter
 from .infer import run_infer
 from .collapse import run_collapse
 from .plot import run_plot
@@ -26,6 +25,7 @@ disto simulate -r REF.fa -p GAMETES -n 10_000_000 -l 100_000 -s 123
 disto mapcall -r REF.fa -g GAMETES.fastq.gz -o . -q 10 -Q 20
 disto filter --vcf GAMETES.vcf.gz --bam GAMETES.sorted.bam -o .
 disto infer -r REF -v GAMETES.phased.vcf.gz -o . -p RATES
+disto collapse -i RATES.tsv -o RATES.loci.tsv
 disto plot -t RATES.tsv -o .
 """
 
@@ -49,8 +49,6 @@ def setup_parsers() -> argparse.ArgumentParser:
         add_help=False,
     )
     parser.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
-
-    # NOTE: your version string currently says "ipyrad". Changing to "disto" is more correct.
     parser.add_argument("-v", "--version", action="version", version=f"disto {VERSION}")
 
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
@@ -64,7 +62,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         subparser,
         f"{HEADER}\ndisto mapcall: map reads, call variants, find recombinants",
     )
-    _setup_filter_subparser(  # NEW
+    _setup_filter_subparser(
         subparser,
         f"{HEADER}\ndisto filter: filter mapcall VCF to biallelic SNPs + heterozygous sites only",
     )
@@ -73,8 +71,8 @@ def setup_parsers() -> argparse.ArgumentParser:
         f"{HEADER}\ndisto infer: infer crossover map from recombinants",
     )
     _setup_collapse_subparser(
-	subparser,
-	f"{HEADER}\ndisto collapse: collapse read-level COs into locus-level events",
+        subparser,
+        f"{HEADER}\ndisto collapse: collapse read-level COs into locus-level events",
     )
     _setup_plot_subparser(
         subparser,
@@ -83,7 +81,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def main() -> None:
     try:
         command_line()
     except KeyboardInterrupt:
@@ -94,22 +92,24 @@ def main():
         raise exc
 
 
-def command_line():
+def command_line() -> None:
     parser = setup_parsers()
     args = parser.parse_args()
 
-    # LOGGING: -----------------------------------------------------
-    if hasattr(args, "log_level"):
-        pass
-
-    if args.subcommand not in ["simulate", "mapcall", "filter", "infer", "collapse", "plot"]:  # NEW
+    # If no subcommand was provided
+    if args.subcommand is None:
         parser.print_help()
         sys.exit(0)
-    else:
-        run_subcommand(args)
+
+    allowed = {"simulate", "mapcall", "filter", "infer", "collapse", "plot"}
+    if args.subcommand not in allowed:
+        parser.print_help()
+        sys.exit(0)
+
+    run_subcommand(args)
 
 
-def run_subcommand(args):
+def run_subcommand(args: argparse.Namespace) -> None:
     if args.subcommand == "simulate":
         logger.info("------------------------------------------------------------")
         logger.info("----- disto simulate: simulate recombinant gamete reads ----")
@@ -141,11 +141,11 @@ def run_subcommand(args):
             min_map_q=args.min_map_q,
             min_base_q=args.min_base_q,
             threads=args.threads,
-            whatshap_threads_per_worker=1, 
-       )
+            whatshap_threads_per_worker=1,
+        )
         sys.exit(0)
 
-    if args.subcommand == "filter":  # NEW
+    if args.subcommand == "filter":
         logger.info("----------------------------------------------------------------")
         logger.info("----- disto filter: biallelic SNPs + heterozygous sites only ---")
         logger.info("----------------------------------------------------------------")
@@ -176,16 +176,16 @@ def run_subcommand(args):
         sys.exit(0)
 
     if args.subcommand == "collapse":
-	logger.info("----------------------------------------------------------------")
-	logger.info("----- disto collapse: collapse read-level crossovers into loci -----")
-    	logger.info("-------------------------------------------------------------------")
-    	run_collapse(
-            tsv=args.infer_tsv,   # or args.tsv if you named it --tsv
+        logger.info("----------------------------------------------------------------")
+        logger.info("----- disto collapse: collapse read-level crossovers into loci -----")
+        logger.info("----------------------------------------------------------------")
+        run_collapse(
+            tsv=args.infer_tsv,   # must match cli_collapse.py dest
             out_tsv=args.out,
             merge_gap=args.merge_gap,
             keep_na=args.keep_na,
-    	)
-    	sys.exit(0)
+        )
+        sys.exit(0)
 
     if args.subcommand == "plot":
         logger.info("----------------------------------------------------------------")
@@ -195,10 +195,13 @@ def run_subcommand(args):
             tsv=args.tsv,
             outdir=args.out,
             prefix=args.prefix,
-            chroms=args.chrom, 
-            bins=args.bins
+            chroms=args.chrom,
+            bins=args.bins,
         )
         sys.exit(0)
+
+    # Should never reach here
+    raise SystemExit(f"Unknown subcommand: {args.subcommand}")
 
 
 if __name__ == "__main__":
