@@ -10,6 +10,7 @@ from .cli_simulate import _setup_simulate_subparser
 from .cli_mapcall import _setup_mapcall_subparser
 from .cli_filter import _setup_filter_subparser 
 from .cli_infer import _setup_infer_subparser
+from .cli_collapse import _setup_collapse_subparser
 from .cli_plot import _setup_plot_subparser
 
 # Workhorses
@@ -17,6 +18,7 @@ from .simulate import run_simulate
 from .mapcall import run_mapcall
 from .filter import run_filter                 
 from .infer import run_infer
+from .collapse import run_collapse
 from .plot import run_plot
 
 """
@@ -70,6 +72,10 @@ def setup_parsers() -> argparse.ArgumentParser:
         subparser,
         f"{HEADER}\ndisto infer: infer crossover map from recombinants",
     )
+    _setup_collapse_subparser(
+	subparser,
+	f"{HEADER}\ndisto collapse: collapse read-level COs into locus-level events",
+    )
     _setup_plot_subparser(
         subparser,
         f"{HEADER}\ndisto plot: plot crossover distributions",
@@ -96,7 +102,7 @@ def command_line():
     if hasattr(args, "log_level"):
         pass
 
-    if args.subcommand not in ["simulate", "mapcall", "filter", "infer", "plot"]:  # NEW
+    if args.subcommand not in ["simulate", "mapcall", "filter", "infer", "collapse", "plot"]:  # NEW
         parser.print_help()
         sys.exit(0)
     else:
@@ -168,6 +174,18 @@ def run_subcommand(args):
             edge_mask_bp=args.edge_mask_bp,
         )
         sys.exit(0)
+
+    if args.subcommand == "collapse":
+	logger.info("----------------------------------------------------------------")
+	logger.info("----- disto collapse: collapse read-level crossovers into loci -----")
+    	logger.info("-------------------------------------------------------------------")
+    	run_collapse(
+            tsv=args.infer_tsv,   # or args.tsv if you named it --tsv
+            out_tsv=args.out,
+            merge_gap=args.merge_gap,
+            keep_na=args.keep_na,
+    	)
+    	sys.exit(0)
 
     if args.subcommand == "plot":
         logger.info("----------------------------------------------------------------")
