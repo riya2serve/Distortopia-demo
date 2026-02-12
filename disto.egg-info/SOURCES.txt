@@ -18,11 +18,13 @@ scripts/sim_gamete_long_reads.py
 scripts/sim_haplotypes.py
 scripts/visualize_crossovers.py
 src/__init__.py
+src/cli_filter.py
 src/cli_infer.py
 src/cli_main.py
 src/cli_mapcall.py
 src/cli_plot.py
 src/cli_simulate.py
+src/filter.py
 src/infer.py
 src/make_wide.py
 src/mapcall.py
