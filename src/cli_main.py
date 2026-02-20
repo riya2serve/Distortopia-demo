@@ -180,7 +180,7 @@ def run_subcommand(args: argparse.Namespace) -> None:
         logger.info("----- disto collapse: collapse read-level crossovers into loci -----")
         logger.info("----------------------------------------------------------------")
         run_collapse(
-            tsv=args.infer_tsv,   # must match cli_collapse.py dest
+            tsv=args.infer_tsv,  # must match cli_collapse.py dest
             out_tsv=args.out,
             merge_gap=args.merge_gap,
             keep_na=args.keep_na,
@@ -191,12 +191,22 @@ def run_subcommand(args: argparse.Namespace) -> None:
         logger.info("----------------------------------------------------------------")
         logger.info("----- disto plot: plot crossover distribution -----------------")
         logger.info("----------------------------------------------------------------")
+
+        # Validate new plot flags (added in cli_plot.py)
+        if getattr(args, "errorbars", False) and getattr(args, "bin_bp", None) is None:
+            raise SystemExit("--errorbars requires --bin-bp (fixed genomic bin size in bp).")
+
         run_plot(
             tsv=args.tsv,
             outdir=args.out,
             prefix=args.prefix,
             chroms=args.chrom,
             bins=args.bins,
+            # NEW passthrough (safe even if plot.py ignores them; but your updated plot.py uses them)
+            errorbars=getattr(args, "errorbars", False),
+            bin_bp=getattr(args, "bin_bp", None),
+            rolling_stats=getattr(args, "rolling_stats", False),
+            rolling_window_bins=getattr(args, "rolling_window_bins", 7),
         )
         sys.exit(0)
 
@@ -206,4 +216,3 @@ def run_subcommand(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     main()
-
