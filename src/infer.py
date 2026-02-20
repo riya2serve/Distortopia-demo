@@ -15,7 +15,7 @@ Notes:
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple, Iterator, Optional, Set
+from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 import os
 import sys
@@ -29,11 +29,9 @@ from loguru import logger
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
 
-
 # CIGAR ops that consume reference/query
 _REF_CONSUME = set("MDN=X")
-_QUERY_CONSUME = set("MIS=X")
-
+_QUERY_CONSUME = set("MIS=X")  # kept for completeness; not used below
 
 OUT_COLUMNS = [
     "scaff",
@@ -137,7 +135,7 @@ def _parse_cigar(cigar: str) -> List[Tuple[str, int]]:
     n = 0
     for ch in cigar:
         if ch.isdigit():
-            n = n * 10 + ord(ch) - 48
+            n = n * 10 + (ord(ch) - 48)
         else:
             ops.append((ch, n))
             n = 0
@@ -170,19 +168,24 @@ def _infer_contig_worker(args: tuple[str, str, str, list[tuple[int, str, str]], 
       contig, bam_path, contig_name, phased_sites, chrom_len, min_snps, edge_mask_bp, tmpdir
     """
     contig, bam_path, contig_name, phased_sites, chrom_len, min_snps, edge_mask_bp, tmpdir = args
+
     tmpdir_p = Path(tmpdir)
+    tmpdir_p.mkdir(parents=True, exist_ok=True)  # safety (especially under multiprocessing)
     out_tsv = tmpdir_p / f"{contig}.tsv"
     out_tmp = Path(str(out_tsv) + f".tmp.{os.getpid()}")
 
-    # If no phased SNPs on this contig, write empty (with no rows)
+    # IMPORTANT: always create the temp file so os.replace cannot fail later
+    # even if we end up writing zero rows.
+    out_tmp.write_text("")
+
+    # If no phased SNPs on this contig, publish empty file
     if not phased_sites:
-        out_tmp.write_text("")  # empty file
         os.replace(out_tmp, out_tsv)
         return str(out_tsv)
 
     # samtools view for just this contig; keep primary alignments only (-F 0x904)
     cmd = [BIN_SAM, "view", "-h", "-F", "0x904", str(bam_path), contig_name]
-    proc = sp.Popen(cmd, stdout=sp.PIPE, text=True, bufsize=1)
+    proc = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE, text=True, bufsize=1)
 
     # phased_sites is sorted by position
     snp_i = 0  # advances monotonically because BAM is coordinate-sorted per contig
@@ -248,7 +251,6 @@ def _infer_contig_worker(args: tuple[str, str, str, list[tuple[int, str, str]], 
                             break
 
                         offset = p - block_start
-                        # offset maps to query index within this block
                         qi = qpos + offset
                         if 0 <= qi < len(seq):
                             b = seq[qi]
@@ -270,7 +272,6 @@ def _infer_contig_worker(args: tuple[str, str, str, list[tuple[int, str, str]], 
                 elif op == "S":
                     qpos += length
                 else:
-                    # H, P, etc. consume neither or are not relevant here
                     continue
 
                 # early exit if we passed the end of the read region with respect to SNPs
@@ -295,8 +296,6 @@ def _infer_contig_worker(args: tuple[str, str, str, list[tuple[int, str, str]], 
                 if not (edge_mask_bp <= int(xl) <= chrom_len - edge_mask_bp):
                     continue
 
-            # emit TSV row
-            # scaff, start, end, nsnps, phased_snps, crossover_left, crossover_right, read
             lines.append(
                 f"{contig_name}\t{pos1}\t{ref_end1}\t{len(bits)}\t{''.join(map(str, bits))}\t{xl}\t{xr}\t{qname}\n"
             )
@@ -308,9 +307,14 @@ def _infer_contig_worker(args: tuple[str, str, str, list[tuple[int, str, str]], 
                 lines.clear()
 
     finally:
+        # close stdout so proc can terminate cleanly
         if proc.stdout is not None:
             proc.stdout.close()
-        proc.wait()
+        _, stderr = proc.communicate()
+        if proc.returncode != 0:
+            # publish stderr to log before raising
+            logger.error(f"samtools view failed on contig {contig_name} (rc={proc.returncode}). stderr:\n{stderr}")
+            raise RuntimeError(f"samtools view failed on contig {contig_name} (rc={proc.returncode})")
 
     # final flush and publish atomically
     if lines:
@@ -337,7 +341,6 @@ def infer_per_contig_to_tsv(
     threads = max(1, int(threads))
     tmpdir.mkdir(parents=True, exist_ok=True)
 
-    # Prepare work
     work: list[tuple[str, str, str, list[tuple[int, str, str]], int, int, int, str]] = []
     for c in contigs:
         phased_sites = phased_dict.get(c, [])
@@ -356,7 +359,6 @@ def infer_per_contig_to_tsv(
             part = tmpdir / f"{c}.tsv"
             if not part.exists():
                 continue
-            # append part content (no header in parts)
             with part.open("r") as fh:
                 for ln in fh:
                     oh.write(ln)
@@ -404,7 +406,7 @@ def run_infer(
         keep = set(include_scaffs)
         contigs = [c for c in contigs if c in keep]
 
-    # Only keep contigs that appear in reference lengths (and in phased_dict, if you want)
+    # Only keep contigs that appear in reference lengths
     contigs = [c for c in contigs if c in chrom_lengths]
     if not contigs:
         raise RuntimeError("No contigs to process after filtering. Check BAM/VCF/reference consistency.")
