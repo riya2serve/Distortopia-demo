@@ -23,12 +23,17 @@ Supports TWO input types:
 Writes ONE PDF PER CHROMOSOME:
     <prefix>.<chrom>.pdf
 If you pass chroms=[...], it will only write those.
+
+NEW (optional):
+- errorbars=True + bin_bp=<int>: add SD error bars computed across reads per bin (read-mode only),
+  using the same logic as plot_errorbars.py (fixed bp binning, per-read per-bin counts).
+- rolling_stats=True: overlay rolling mean and rolling median curves (centered window in bins).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Tuple
 
 import numpy as np
 import pandas as pd
@@ -60,6 +65,73 @@ def _detect_mode(cols: set[str]) -> Literal["read", "locus"]:
     )
 
 
+def _hist_mean_sd_by_bin_readmode(
+    sub: pd.DataFrame,
+    *,
+    bin_bp: int,
+    n_reads: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    EXACT SD logic from plot_errorbars.py (read-mode only, fixed bp binning).
+
+    For each bin:
+      - For each read, k = # crossover calls that read contributes to that bin
+      - mean = E[k] across reads
+      - sd   = sqrt(E[k^2] - (E[k])^2) across reads
+    Returns: (mean, sd, bin_edges)
+    """
+    cxs = sub["cx_mid"].to_numpy()
+
+    left = int((cxs.min() // bin_bp) * bin_bp)
+    right = int(((cxs.max() // bin_bp) + 1) * bin_bp)
+    bin_edges = np.arange(left, right + bin_bp, bin_bp, dtype=int)
+
+    nbins = len(bin_edges) - 1
+    if nbins <= 0:
+        raise ValueError("No bins created — check bin_bp and data range.")
+
+    # assign each crossover event to a bin index
+    bidx = np.digitize(cxs, bin_edges, right=False) - 1
+    bidx = np.clip(bidx, 0, nbins - 1)
+
+    tmp = pd.DataFrame({"bin": bidx, "read": sub["read"].astype(str).to_numpy()})
+
+    # per-read per-bin counts (k)
+    per = tmp.groupby(["bin", "read"]).size().rename("k").reset_index()
+
+    # sum(k) and sum(k^2) per bin (missing bins => 0)
+    sum_k = (
+        per.groupby("bin")["k"]
+        .sum()
+        .reindex(range(nbins), fill_value=0)
+        .to_numpy(float)
+    )
+    sum_k2 = (
+        per.groupby("bin")["k"]
+        .apply(lambda s: (s * s).sum())
+        .reindex(range(nbins), fill_value=0)
+        .to_numpy(float)
+    )
+
+    mean = sum_k / float(n_reads)
+    ex2 = sum_k2 / float(n_reads)
+    var = ex2 - mean * mean
+    var[var < 0] = 0.0  # numerical safety
+    sd = np.sqrt(var)
+
+    return mean, sd, bin_edges
+
+
+def _rolling_stats(y: np.ndarray, window_bins: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Centered rolling mean and median with min_periods=1."""
+    if window_bins <= 1:
+        return y.copy(), y.copy()
+
+    s = pd.Series(y)
+    r = s.rolling(window=window_bins, center=True, min_periods=1)
+    return r.mean().to_numpy(), r.median().to_numpy()
+
+
 def run_plot(
     tsv: Path,
     outdir: Path,
@@ -68,7 +140,25 @@ def run_plot(
     bins: int = 50,
     read_length: int = 100_000,
     nreads_total: Optional[int] = None,
+    *,
+    # NEW
+    errorbars: bool = False,
+    bin_bp: Optional[int] = None,
+    rolling_stats: bool = False,
+    rolling_window_bins: int = 7,
 ) -> None:
+    """
+    Parameters
+    ----------
+    errorbars:
+        If True, add SD error bars (read-mode only). Requires bin_bp.
+    bin_bp:
+        Fixed bin size in bp for errorbar mode. If errorbars=True and bin_bp is None -> error.
+    rolling_stats:
+        If True, overlay rolling mean + rolling median lines.
+    rolling_window_bins:
+        Window size (in number of bins) for rolling mean/median (centered).
+    """
     tsv = Path(tsv).expanduser().resolve()
     outdir = Path(outdir).expanduser().resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +206,9 @@ def run_plot(
 
     else:
         # locus mode
+        if errorbars:
+            raise ValueError("errorbars=True is only supported for read-level (infer) TSVs.")
+
         data["locus_left"] = pd.to_numeric(data["locus_left"], errors="coerce")
         data["locus_right"] = pd.to_numeric(data["locus_right"], errors="coerce")
         data = data.dropna(subset=["locus_left", "locus_right"]).copy()
@@ -135,7 +228,6 @@ def run_plot(
         # Optional weighting by read support
         if "n_reads" in data.columns:
             data["n_reads"] = pd.to_numeric(data["n_reads"], errors="coerce").fillna(1).astype(int)
-            # clamp to >=1
             data.loc[data["n_reads"] < 1, "n_reads"] = 1
             weights_col = "n_reads"
             ylab = "Crossover frequency (weighted support per bin)"
@@ -155,12 +247,10 @@ def run_plot(
 
         # ---- End-masking ----
         if mode == "read":
-            # Based on read span columns
             sub = sub.loc[sub["start"] > read_length]
             chrom_end = sub["end"].max()
             sub = sub.loc[sub["end"] < (chrom_end - read_length)]
         else:
-            # Based on locus positions (cx_mid) and inferred chrom end from locus_right
             chrom_end = sub["locus_right"].max()
             sub = sub.loc[sub["cx_mid"] > read_length]
             sub = sub.loc[sub["cx_mid"] < (chrom_end - read_length)]
@@ -170,8 +260,6 @@ def run_plot(
             continue
 
         # ---- Normalization ----
-        # Read-level: normalize by unique reads (or nreads_total)
-        # Locus-level: normalize by sum(n_reads) if present else count(loci)
         if mode == "read":
             if nreads_total is None:
                 n_norm = int(sub["read"].nunique())
@@ -187,17 +275,40 @@ def run_plot(
                 n_norm = int(len(sub))
             n_norm = max(1, n_norm)
 
-        # ---- Histogram ----
-        cxs = sub["cx_mid"].to_numpy()
-        w = sub[weights_col].to_numpy() if weights_col else None
-        mags, bin_edges = np.histogram(cxs, bins=bins, weights=w)
+        # ---- Histogram (+ optional SD for read-mode) ----
+        sd = None
 
-        # Normalize to frequency
-        mags = mags / float(n_norm)
+        if mode == "read" and errorbars:
+            if bin_bp is None:
+                raise ValueError("errorbars=True requires bin_bp (fixed bp bins).")
+
+            # SD is "across reads", so use actual unique reads in this chrom after masking
+            n_reads = int(sub["read"].nunique())
+            if n_reads <= 0:
+                logger.warning(f"{chrom}: zero unique reads after filtering; skipping.")
+                continue
+
+            mags, sd, bin_edges = _hist_mean_sd_by_bin_readmode(
+                sub,
+                bin_bp=int(bin_bp),
+                n_reads=n_reads,
+            )
+            n_norm = n_reads  # title shows actual read count used for SD
+
+        else:
+            cxs = sub["cx_mid"].to_numpy()
+            w = sub[weights_col].to_numpy() if weights_col else None
+            mags, bin_edges = np.histogram(cxs, bins=bins, weights=w)
+            mags = mags / float(n_norm)
 
         # Convert x-axis to Mb
         bin_edges_mb = bin_edges / 1e6
         mids_mb = (bin_edges_mb[:-1] + bin_edges_mb[1:]) / 2.0
+
+        # Rolling stats (mean/median) over bins
+        roll_mean = roll_med = None
+        if rolling_stats:
+            roll_mean, roll_med = _rolling_stats(mags, window_bins=int(rolling_window_bins))
 
         # Canvas + axes
         canvas = toyplot.Canvas(width=600, height=350)
@@ -208,10 +319,16 @@ def run_plot(
         )
 
         # Title
+        title_extra = ""
+        if mode == "read" and errorbars:
+            title_extra = f", bin={int(bin_bp)//1000}kb"
+        elif rolling_stats:
+            title_extra = f", roll={int(rolling_window_bins)} bins"
+
         canvas.text(
             300,
             20,
-            f"{prefix} — {chrom} (N={n_norm} {title_suffix})",
+            f"{prefix} — {chrom} (N={n_norm} {title_suffix}){title_extra}",
             style={"font-size": "16px", "font-weight": "bold", "text-anchor": "middle"},
         )
 
@@ -230,13 +347,30 @@ def run_plot(
         axes.y.label.offset = 28
         axes.y.label.style["font-size"] = 14
 
-        # Bars + line
+        # Bars + base line
         m0 = axes.bars((mags, bin_edges_mb), opacity=0.6)
         m1 = axes.plot(mids_mb, mags, opacity=0.8)
 
         # Recolor (your palette)
         m0._fill.color = "#d1cef6"
         m1._stroke.color = "#7b6de2"
+
+        # Error bars (SD): draw as vertical segments at each bin midpoint
+        if sd is not None:
+            for x, y, e in zip(mids_mb, mags, sd):
+                y0 = max(0.0, y - e)
+                y1 = y + e
+                seg = axes.plot([x, x], [y0, y1], opacity=0.35)
+                seg._stroke.color = "#000000"
+
+        # Rolling mean / median overlays
+        if roll_mean is not None and roll_med is not None:
+            rm = axes.plot(mids_mb, roll_mean, opacity=0.9)
+            rd = axes.plot(mids_mb, roll_med, opacity=0.9)
+
+            # keep subtle / readable
+            rm._stroke.color = "#000000"   # rolling mean
+            rd._stroke.color = "#444444"   # rolling median
 
         out = outdir / f"{prefix}.{chrom}.pdf"
         toyplot.pdf.render(canvas, str(out))
@@ -249,4 +383,3 @@ def run_plot(
 
 if __name__ == "__main__":
     raise SystemExit("Run via the CLI, e.g. `disto plot --tsv ... --out ... --prefix ...`")
-
