@@ -24,10 +24,17 @@ Writes ONE PDF PER CHROMOSOME:
     <prefix>.<chrom>.pdf
 If you pass chroms=[...], it will only write those.
 
-NEW (optional):
+Optional extras:
 - errorbars=True + bin_bp=<int>: add SD error bars computed across reads per bin (read-mode only),
   using the same logic as plot_errorbars.py (fixed bp binning, per-read per-bin counts).
 - rolling_stats=True: overlay rolling mean and rolling median curves (centered window in bins).
+
+Color scheme (more distinguishable):
+- Bars (hist): light gray
+- Raw line (same as bars): medium gray
+- SD error bars: dark gray
+- Rolling mean: blue
+- Rolling median: orange/red
 """
 
 from __future__ import annotations
@@ -347,30 +354,40 @@ def run_plot(
         axes.y.label.offset = 28
         axes.y.label.style["font-size"] = 14
 
-        # Bars + base line
-        m0 = axes.bars((mags, bin_edges_mb), opacity=0.6)
-        m1 = axes.plot(mids_mb, mags, opacity=0.8)
+        # -----------------------------
+        # PLOTTING (cleaner colors)
+        # -----------------------------
 
-        # Recolor (your palette)
-        m0._fill.color = "#d1cef6"
-        m1._stroke.color = "#7b6de2"
+        # Bars: light gray
+        m0 = axes.bars((mags, bin_edges_mb), opacity=0.85)
+        m0._fill.color = "#d9d9d9"
 
-        # Error bars (SD): draw as vertical segments at each bin midpoint
+        # Raw line: medium gray (optional but helps guide the eye)
+        m_raw = axes.plot(mids_mb, mags, opacity=0.9)
+        m_raw._stroke.color = "#7a7a7a"
+        m_raw._stroke.width = 1.5
+
+        # Error bars (SD): dark gray vertical segments at each bin midpoint
         if sd is not None:
             for x, y, e in zip(mids_mb, mags, sd):
                 y0 = max(0.0, y - e)
                 y1 = y + e
-                seg = axes.plot([x, x], [y0, y1], opacity=0.35)
-                seg._stroke.color = "#000000"
+                seg = axes.plot([x, x], [y0, y1], opacity=0.85)
+                seg._stroke.color = "#333333"
+                seg._stroke.width = 1.0
 
         # Rolling mean / median overlays
         if roll_mean is not None and roll_med is not None:
-            rm = axes.plot(mids_mb, roll_mean, opacity=0.9)
-            rd = axes.plot(mids_mb, roll_med, opacity=0.9)
+            rm = axes.plot(mids_mb, roll_mean, opacity=1.0)
+            rd = axes.plot(mids_mb, roll_med, opacity=1.0)
 
-            # keep subtle / readable
-            rm._stroke.color = "#000000"   # rolling mean
-            rd._stroke.color = "#444444"   # rolling median
+            # Rolling mean: blue
+            rm._stroke.color = "#1f77b4"
+            rm._stroke.width = 2.5
+
+            # Rolling median: orange/red
+            rd._stroke.color = "#d62728"
+            rd._stroke.width = 2.5
 
         out = outdir / f"{prefix}.{chrom}.pdf"
         toyplot.pdf.render(canvas, str(out))
