@@ -9,7 +9,6 @@ from .cli_simulate import _setup_simulate_subparser
 from .cli_mapcall import _setup_mapcall_subparser
 from .cli_filter import _setup_filter_subparser
 from .cli_infer import _setup_infer_subparser
-from .cli_collapse import _setup_collapse_subparser
 from .cli_plot import _setup_plot_subparser
 
 # Workhorses
@@ -17,7 +16,6 @@ from .simulate import run_simulate
 from .mapcall import run_mapcall
 from .filter import run_filter
 from .infer import run_infer
-from .collapse import run_collapse
 from .plot import run_plot
 
 """
@@ -25,7 +23,6 @@ disto simulate -r REF.fa -p GAMETES -n 10_000_000 -l 100_000 -s 123
 disto mapcall -r REF.fa -g GAMETES.fastq.gz -o . -q 10 -Q 20
 disto filter --vcf GAMETES.vcf.gz --bam GAMETES.sorted.bam -o .
 disto infer -r REF -v GAMETES.phased.vcf.gz -o . -p RATES
-disto collapse -i RATES.tsv -o RATES.loci.tsv
 disto plot -t RATES.tsv -o .
 """
 
@@ -70,10 +67,6 @@ def setup_parsers() -> argparse.ArgumentParser:
         subparser,
         f"{HEADER}\ndisto infer: infer crossover map from recombinants",
     )
-    _setup_collapse_subparser(
-        subparser,
-        f"{HEADER}\ndisto collapse: collapse read-level COs into locus-level events",
-    )
     _setup_plot_subparser(
         subparser,
         f"{HEADER}\ndisto plot: plot crossover distributions",
@@ -101,7 +94,7 @@ def command_line() -> None:
         parser.print_help()
         sys.exit(0)
 
-    allowed = {"simulate", "mapcall", "filter", "infer", "collapse", "plot"}
+    allowed = {"simulate", "mapcall", "filter", "infer", "plot"}
     if args.subcommand not in allowed:
         parser.print_help()
         sys.exit(0)
@@ -172,18 +165,6 @@ def run_subcommand(args: argparse.Namespace) -> None:
             min_snps=args.min_snps,
             threads=args.threads,
             edge_mask_bp=args.edge_mask_bp,
-        )
-        sys.exit(0)
-
-    if args.subcommand == "collapse":
-        logger.info("----------------------------------------------------------------")
-        logger.info("----- disto collapse: collapse read-level crossovers into loci -----")
-        logger.info("----------------------------------------------------------------")
-        run_collapse(
-            tsv=args.infer_tsv,  # must match cli_collapse.py dest
-            out_tsv=args.out,
-            merge_gap=args.merge_gap,
-            keep_na=args.keep_na,
         )
         sys.exit(0)
 
